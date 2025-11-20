@@ -1,0 +1,45 @@
+import { NextRequest, NextResponse } from 'next/server'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+    console.log('[/api/auth/register] POST request')
+
+    const backendResponse = await fetch(
+      `${BACKEND_API_URL}/api/v1/auth/register`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      }
+    )
+
+    if (!backendResponse.ok) {
+      const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
+      console.error('[/api/auth/register] Backend error:', errorData)
+      return NextResponse.json(
+        { error: errorData.detail || 'Failed to register user' },
+        { status: backendResponse.status }
+      )
+    }
+
+    const data = await backendResponse.json()
+    console.log('[/api/auth/register] User registered successfully')
+
+    return NextResponse.json(data, { status: 201 })
+  } catch (error) {
+    console.error('[/api/auth/register] Error:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}

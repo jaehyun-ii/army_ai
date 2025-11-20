@@ -1,0 +1,53 @@
+# ===============================================
+# Army AI Platform - GPU Requirements
+# For use with nvcr.io/nvidia/pytorch:24.04-py3
+# ===============================================
+# NOTE: PyTorch, torchvision, torchaudio, CUDA are
+#       already included in the NGC base image!
+
+# Core Dependencies
+# ==================
+
+# FastAPI & Server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.20
+
+# Database
+sqlalchemy>=2.0.36
+asyncpg>=0.30.0
+psycopg2-binary>=2.9.10
+
+# Validation & Settings
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+email-validator>=2.2.0
+
+# Authentication & Security
+python-jose[cryptography]>=3.3.0
+PyJWT>=2.10.0
+passlib[bcrypt]>=1.7.4
+python-dateutil>=2.9.0
+
+# Environment & Config
+python-dotenv>=1.0.1
+pyyaml>=6.0.2
+
+# Image Processing
+opencv-python-headless>=4.10.0
+
+# ===============================================
+# Deep Learning Libraries
+# ===============================================
+# PyTorch, torchvision, torchaudio: Already in base image ✅
+# NumPy: Already in base image ✅
+# Pillow: Already in base image ✅
+
+# MMDetection dependencies
+# Note: Installed via mim in Dockerfile due to binary compatibility issues
+
+# Scikit-learn
+scikit-learn>=1.5.0
+
+# Matplotlib (for visualization)
+matplotlib>=3.9.0

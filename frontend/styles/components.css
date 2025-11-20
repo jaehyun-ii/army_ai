@@ -1,0 +1,97 @@
+/* Common component styles to reduce repetition */
+
+/* Card Styles */
+.card-primary {
+  @apply bg-slate-800/50 border-white/10;
+}
+
+.card-secondary {
+  @apply bg-slate-700/30 border-white/10;
+}
+
+.card-dark {
+  @apply bg-slate-900/50 border-white/10;
+}
+
+/* Input Styles */
+.input-primary {
+  @apply bg-slate-700/50 border-white/20 text-white placeholder:text-slate-300;
+}
+
+.input-auth {
+  @apply h-12 border-2 border-white/20 bg-slate-800/70 backdrop-blur-sm text-white placeholder:text-slate-300 focus:border-primary focus:bg-slate-800/90 transition-all duration-300;
+}
+
+/* Button Styles */
+.btn-primary-gradient {
+  @apply bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white transition-all duration-300;
+}
+
+.btn-secondary {
+  @apply bg-slate-700/50 hover:bg-slate-700/70 text-white transition-colors;
+}
+
+/* Badge Styles */
+.badge-success {
+  @apply bg-green-900/40 text-white border-green-500/40;
+}
+
+.badge-warning {
+  @apply bg-yellow-900/40 text-white border-yellow-500/40;
+}
+
+.badge-error {
+  @apply bg-red-900/40 text-white border-red-500/40;
+}
+
+/* Stat Card Styles */
+.stat-card {
+  @apply bg-slate-700/30 rounded-lg p-3;
+}
+
+/* Table Row Styles */
+.table-row-hover {
+  @apply hover:bg-slate-800/50 transition-colors cursor-pointer;
+}
+
+.table-row-selected {
+  @apply bg-blue-900/30 border border-blue-500/30;
+}
+
+/* Modal/Dialog Overlay */
+.overlay-dark {
+  @apply bg-black/80 backdrop-blur-sm;
+}
+
+/* Progress Bar Container */
+.progress-container {
+  @apply bg-slate-700/30 rounded-full overflow-hidden;
+}
+
+/* Separator Line */
+.separator-light {
+  @apply bg-white/10;
+}
+
+/* Text Styles */
+.text-muted {
+  @apply text-slate-300;
+}
+
+.text-label {
+  @apply text-white font-medium;
+}
+
+/* Container Styles */
+.container-scroll {
+  @apply overflow-hidden h-full;
+}
+
+/* Grid Layouts */
+.grid-stat-3 {
+  @apply grid grid-cols-3 gap-4;
+}
+
+.grid-stat-4 {
+  @apply grid grid-cols-4 gap-4;
+}
