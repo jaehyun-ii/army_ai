@@ -86,8 +86,8 @@ export function EvaluationImageComparison({
       if (viewMode === "all") {
         // All 모드: base와 attack을 각각 요청
         const [baseResponse, attackResponse] = await Promise.all([
-          fetch(`http://localhost:8000/api/v1/evaluation/runs/${runId}/images-with-predictions?dataset_type=base`),
-          fetch(`http://localhost:8000/api/v1/evaluation/runs/${runId}/images-with-predictions?dataset_type=attack`)
+          fetch(`${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/${runId}/images-with-predictions?dataset_type=base`),
+          fetch(`${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/${runId}/images-with-predictions?dataset_type=attack`)
         ])
 
         if (!baseResponse.ok || !attackResponse.ok) {
@@ -133,7 +133,7 @@ export function EvaluationImageComparison({
       }
 
       // Base 또는 Attack 모드: 단일 요청
-      let url = `http://localhost:8000/api/v1/evaluation/runs/${runId}/images-with-predictions`
+      let url = `${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/${runId}/images-with-predictions`
 
       if (viewMode === "base") {
         url += "?dataset_type=base"

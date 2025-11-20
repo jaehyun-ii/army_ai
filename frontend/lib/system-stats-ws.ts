@@ -2,6 +2,8 @@
  * SSE (Server-Sent Events) client for real-time system statistics
  */
 
+import { getBackendUrl } from './backend-url'
+
 export interface SystemStats {
   timestamp: number
   sample_number?: number
@@ -78,7 +80,7 @@ export class SystemStatsSSE {
     private onError?: ErrorCallback,
     private onClose?: CloseCallback
   ) {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+    const backendUrl = getBackendUrl()
     this.url = `${backendUrl}/api/v1/system/stats/stream?interval=${interval}`
   }
 
@@ -188,7 +190,7 @@ export function useSystemStatsSSE(
  * Fetch system stats via HTTP (one-time request)
  */
 export async function fetchSystemStats(): Promise<SystemStats> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+  const backendUrl = getBackendUrl()
   const response = await fetch(`${backendUrl}/api/v1/system/stats`)
 
   if (!response.ok) {

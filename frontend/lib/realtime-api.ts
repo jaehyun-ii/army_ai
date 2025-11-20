@@ -2,7 +2,9 @@
  * Real-time Camera & Inference API Client
  */
 
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+import { getBackendUrl } from './backend-url'
+
+const BACKEND_API_URL = getBackendUrl()
 const API_V1 = '/api/v1'
 
 // Re-export from adversarial-api for convenience

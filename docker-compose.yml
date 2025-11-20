@@ -123,10 +123,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       NODE_ENV: ${NODE_ENV}
 
-      # API URLs (브라우저에서 접속)
+      # API URLs (브라우저에서 접속 - 클라이언트사이드)
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_BACKEND_API_URL: ${NEXT_PUBLIC_API_URL}
 
-      # Backend URL (서버사이드 통신용)
+      # Backend URL (서버사이드 API 라우트 통신용 - 최우선)
+      BACKEND_API_URL: ${INTERNAL_BACKEND_URL}
       BACKEND_URL: ${INTERNAL_BACKEND_URL}
     ports:
       - "${FRONTEND_PORT}:3000"

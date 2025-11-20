@@ -3,7 +3,9 @@
  * 새로운 백엔드 API: /home/jaehyun/army/army_backend/backend
  */
 
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+import { getBackendUrl } from './backend-url'
+
+const BACKEND_API_URL = getBackendUrl()
 const API_V1 = '/api/v1'
 
 interface APIResponse<T> {

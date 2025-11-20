@@ -127,7 +127,7 @@ export function ImageSelector({ datasetId, className = '' }: ImageSelectorProps)
 
             <AnnotatedImageViewer
               imageId={selectedImageId}
-              imageUrl={`http://localhost:8000/api/v1/storage/file?file_path=${encodeURIComponent(selectedImage.storage_path)}`}
+              imageUrl={`${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/storage/file?file_path=${encodeURIComponent(selectedImage.storage_path)}`}
               minConfidence={0.3}
               showLabels={true}
             />

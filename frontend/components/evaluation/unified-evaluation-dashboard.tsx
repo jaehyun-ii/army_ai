@@ -317,7 +317,7 @@ export function UnifiedEvaluationDashboard() {
         try {
           // Setup SSE connection for real-time logs
           const eventSource = new EventSource(
-            `http://localhost:8000/api/v1/evaluation/runs/events/${sessionId}`
+            `${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/events/${sessionId}`
           )
 
           eventSources.push(eventSource)
