@@ -2,9 +2,10 @@
 # Army AI Platform - Docker Compose
 # ===============================================
 # GPU-accelerated deployment with NVIDIA NGC PyTorch
-# Base Image: nvcr.io/nvidia/pytorch:24.04-py3
+# Base Image: nvcr.io/nvidia/pytorch:25.10-py3
+# Container: Ubuntu 22.04, CUDA 13.0.2, PyTorch 2.9.0a0, TensorRT 10.13.3, Python 3.10
 # Requirements: NVIDIA GPU, nvidia-container-toolkit
-# Usage: docker-compose up -d
+# Usage: docker-compose up --build -d
 # ===============================================
 
 services:
