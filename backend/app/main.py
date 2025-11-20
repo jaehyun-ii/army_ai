@@ -55,7 +55,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,7 +94,7 @@ async def startup_event():
     """Application startup tasks."""
     logger.info(f"Starting {settings.APP_NAME}...")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"API docs available at: http://localhost:8000{settings.API_PREFIX}/docs")
+    logger.info(f"API docs available at: http://localhost:{settings.BACKEND_PORT}{settings.API_PREFIX}/docs")
 
     # Initialize cache
     await cache_manager.initialize()
@@ -138,10 +138,13 @@ if __name__ == "__main__":
 
     logger.info(f"Starting uvicorn with reload_dirs: {reload_dirs}")
 
+    # 환경변수에서 포트 읽기 (docker에서는 컨테이너 내부 포트 8000 사용)
+    port = int(os.getenv("PORT", "8000"))
+
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=port,
         reload=settings.DEBUG,
         reload_dirs=reload_dirs,
         timeout_graceful_shutdown=timeout_graceful_shutdown,

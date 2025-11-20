@@ -114,13 +114,20 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      # Database (내부 통신용)
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${INTERNAL_POSTGRES_URL}/${POSTGRES_DB}?schema=public
+
+      # Auth
       NEXTAUTH_URL: ${NEXTAUTH_URL}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       JWT_SECRET: ${JWT_SECRET}
       NODE_ENV: ${NODE_ENV}
+
+      # API URLs (브라우저에서 접속)
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+
+      # Backend URL (서버사이드 통신용)
+      BACKEND_URL: ${INTERNAL_BACKEND_URL}
     ports:
       - "${FRONTEND_PORT}:3000"
     volumes:

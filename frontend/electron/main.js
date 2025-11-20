@@ -21,9 +21,10 @@ function createWindow() {
     show: false
   })
 
-  // 개발 환경에서는 localhost:3000, 프로덕션에서는 빌드된 파일
+  // 개발 환경에서는 환경변수 포트 또는 기본 3000, 프로덕션에서는 빌드된 파일
+  const frontendPort = process.env.FRONTEND_PORT || '3000'
   const startUrl = isDev
-    ? 'http://localhost:3000'
+    ? `http://localhost:${frontendPort}`
     : `file://${path.join(__dirname, '../out/index.html')}`
 
   mainWindow.loadURL(startUrl)

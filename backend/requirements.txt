@@ -52,5 +52,9 @@ scikit-learn>=1.5.0
 # Matplotlib (for visualization)
 matplotlib>=3.9.0
 
-# Progress bar
+# Progress bar & Data processing
 tqdm>=4.66.0
+pandas>=2.1.0
+
+# System monitoring
+psutil>=6.0.0

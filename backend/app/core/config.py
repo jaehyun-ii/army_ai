@@ -122,17 +122,25 @@ class Settings(BaseSettings):
     AWS_REGION: Optional[str] = None
     S3_BUCKET: Optional[str] = None
 
-    # CORS
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "http://localhost:8080",
-        "http://localhost:8000",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:8000",
-    ]
+    # CORS (환경변수에서 포트 읽어오기)
+    FRONTEND_PORT: int = 54322
+    BACKEND_PORT: int = 54321
+
+    @property
+    def cors_origins(self) -> List[str]:
+        """동적으로 CORS origins 생성"""
+        return [
+            f"http://localhost:{self.FRONTEND_PORT}",
+            f"http://localhost:{self.BACKEND_PORT}",
+            "http://localhost:3000",  # 개발용
+            "http://localhost:8000",  # 개발용
+            f"http://127.0.0.1:{self.FRONTEND_PORT}",
+            f"http://127.0.0.1:{self.BACKEND_PORT}",
+            "http://127.0.0.1:3000",  # 개발용
+            "http://127.0.0.1:8000",  # 개발용
+        ]
+
+    CORS_ORIGINS: List[str] = []  # 초기화용, @property 사용
     CORS_ALLOW_CREDENTIALS: bool = True
     CORS_ALLOW_METHODS: List[str] = ["*"]
     CORS_ALLOW_HEADERS: List[str] = ["*"]
