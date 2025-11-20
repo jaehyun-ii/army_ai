@@ -41,7 +41,17 @@ RUN apt-get update && \
     libffi-dev \
     libjpeg-dev \
     libpng-dev \
-    ca-certificates && \
+    ca-certificates \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgstreamer1.0-0 \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
     ln -sf /usr/bin/pip3 /usr/bin/pip && \
     rm -rf /var/lib/apt/lists/*
