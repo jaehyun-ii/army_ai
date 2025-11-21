@@ -1,11 +1,12 @@
 "use client"
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { useModels } from '@/hooks/api'
 import {
   Select,
   SelectContent,
@@ -65,7 +66,7 @@ interface AutoDetectedMetadata {
 }
 
 // Simple File Upload Component (for .pt + optional config file)
-function SimpleModelUploadContent() {
+function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
   const [weightsFile, setWeightsFile] = useState<File | null>(null)
   const [configFile, setConfigFile] = useState<File | null>(null)
   const [autoDetectedInfo, setAutoDetectedInfo] = useState<AutoDetectedMetadata | null>(null)
@@ -158,6 +159,7 @@ function SimpleModelUploadContent() {
         setModelVersion('1.0.0')
         setModelDescription('')
         setAutoDetectedInfo(null)
+        onSuccess?.()
       }, 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다')
@@ -341,8 +343,9 @@ function SimpleModelUploadContent() {
 }
 
 export function AIModelManagement() {
-  const [models, setModels] = useState<AIModel[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // Use custom hook for models
+  const { data: modelsData, isLoading, refetch } = useModels(0, 100)
+
   const [selectedModel, setSelectedModel] = useState<AIModel | null>(null)
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false)
   const [isTestInferenceDialogOpen, setIsTestInferenceDialogOpen] = useState(false)
@@ -353,51 +356,18 @@ export function AIModelManagement() {
   const [modelToDelete, setModelToDelete] = useState<AIModel | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
-  // Fetch models from API
-  const fetchModels = async () => {
-    setIsLoading(true)
-    try {
-      const response = await fetch('/api/models')
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch models')
-      }
-
-      const data = await response.json()
-
-      // Transform API response
-      const transformedModels: AIModel[] = data.map((model: any) => ({
-        id: model.id,
-        name: model.name,
-        type: model.task === 'object-detection' ? '객체탐지' : '분류',
-        version: model.version,
-        framework: model.framework,
-        status: 'unloaded',
-        is_loaded: false,
-        num_classes: model.labelmap ? Object.keys(model.labelmap).length : 0,
-        lastUpdated: model.created_at ? new Date(model.created_at).toLocaleDateString('ko-KR') : 'N/A'
-      }))
-
-      setModels(transformedModels)
-    } catch (error) {
-      console.error('Error fetching models:', error)
-      setModels([])
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  // Fetch models on mount
-  useEffect(() => {
-    fetchModels()
-  }, [])
-
-  // Refresh when upload dialog closes
-  useEffect(() => {
-    if (!isUploadDialogOpen) {
-      fetchModels()
-    }
-  }, [isUploadDialogOpen])
+  // Transform API response to component format
+  const models: AIModel[] = modelsData?.map((model: any) => ({
+    id: model.id,
+    name: model.name,
+    type: model.task === 'object-detection' ? '객체탐지' : '분류',
+    version: model.version,
+    framework: model.framework,
+    status: 'unloaded' as const,
+    is_loaded: false,
+    num_classes: model.labelmap ? Object.keys(model.labelmap).length : 0,
+    lastUpdated: model.created_at ? new Date(model.created_at).toLocaleDateString('ko-KR') : 'N/A'
+  })) || []
 
   // Handle image upload for testing
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -478,7 +448,7 @@ export function AIModelManagement() {
       }
 
       // Success - refresh model list
-      await fetchModels()
+      await refetch()
       setModelToDelete(null)
     } catch (error) {
       console.error('Delete model error:', error)
@@ -525,7 +495,7 @@ export function AIModelManagement() {
               <CardDescription>객체탐지 및 식별 AI 모델을 관리합니다</CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={fetchModels} disabled={isLoading}>
+              <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isLoading}>
                 <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                 새로고침
               </Button>
@@ -544,7 +514,7 @@ export function AIModelManagement() {
                     </DialogDescription>
                   </DialogHeader>
 
-                  <SimpleModelUploadContent />
+                  <SimpleModelUploadContent onSuccess={() => refetch()} />
                 </DialogContent>
               </Dialog>
             </div>

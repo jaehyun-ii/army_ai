@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { AdversarialToolLayout } from "@/components/layouts/adversarial-tool-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -26,6 +26,7 @@ import {
   Info,
   Brain
 } from "lucide-react"
+import { useModels, useCreateEvaluation, useExecuteEvaluation } from "@/hooks/api"
 import { apiClient } from "@/lib/api-client"
 import { getImageUrlByStorageKey } from "@/lib/adversarial-api"
 import { toast } from "sonner"
@@ -55,6 +56,11 @@ interface Dataset {
 }
 
 export function UnifiedEvaluationDashboard() {
+  // Use custom hooks
+  const { data: modelsData } = useModels(0, 100)
+  const createEvaluationMutation = useCreateEvaluation()
+  const executeEvaluationMutation = useExecuteEvaluation()
+
   // Form states
   const [evaluationName, setEvaluationName] = useState("")
   const [description, setDescription] = useState("")
@@ -64,7 +70,7 @@ export function UnifiedEvaluationDashboard() {
   const [datasetTab, setDatasetTab] = useState<"base" | "attack">("base")
 
   // Data states
-  const [models, setModels] = useState<Model[]>([])
+  const models: Model[] = useMemo(() => modelsData || [], [modelsData])
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [baseDatasetImages, setBaseDatasetImages] = useState<any[]>([])
   const [attackDatasetImages, setAttackDatasetImages] = useState<any[]>([])
@@ -85,9 +91,8 @@ export function UnifiedEvaluationDashboard() {
   const [loadingResults, setLoadingResults] = useState(false)
   const [comparisonData, setComparisonData] = useState<any>(null)
 
-  // Load data
+  // Load datasets on mount
   useEffect(() => {
-    loadModels()
     loadDatasets()
   }, [])
 
@@ -113,16 +118,6 @@ export function UnifiedEvaluationDashboard() {
   useEffect(() => {
     setCurrentImagePage(0)
   }, [selectedBaseDataset, selectedAttackDataset])
-
-  const loadModels = async () => {
-    try {
-      const response: any = await apiClient.getModels()
-      setModels(response || [])
-    } catch (error) {
-      console.error("Failed to load models:", error)
-      toast.error("모델 목록을 불러오는데 실패했습니다")
-    }
-  }
 
   const loadDatasets = async () => {
     try {

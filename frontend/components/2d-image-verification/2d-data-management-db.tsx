@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { apiClient } from "@/lib/api-client"
+import { useImageAnnotations } from "@/hooks/api"
 import {
   CardContent,
   CardDescription,
@@ -188,6 +188,13 @@ export function DataManagementDB() {
   const [sortOption, setSortOption] = useState("recent")
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(24)
+
+  // Use custom hook for image annotations
+  const { data: annotationsData } = useImageAnnotations(
+    selectedImage?.id || '',
+    { annotation_type: 'bbox', min_confidence: 0.0 },
+    !!selectedImage?.id
+  )
 
   // 동적 그리드 컬럼 계산
   const getGridCols = useMemo(() => {
@@ -486,68 +493,55 @@ export function DataManagementDB() {
     return null
   }, [metadataMap, selectedImage, imageDetections])
 
-  // Fetch annotations from backend when image is selected
+  // Process annotations when data changes
   useEffect(() => {
-    if (!selectedImage?.id) {
+    if (!selectedImage?.id || !annotationsData) {
       setImageDetections([])
       return
     }
 
-    const fetchAnnotations = async () => {
-      try {
-        console.log("[DataManagementDB] Fetching annotations for image:", selectedImage.id)
+    console.log("[DataManagementDB] Processing annotations for image:", selectedImage.id)
+    console.log("[DataManagementDB] Annotations data:", annotationsData)
 
-        const annotations = await apiClient.getImageAnnotations(selectedImage.id, {
-          annotation_type: 'bbox',
-          min_confidence: 0.0
-        }) as any[]
+    const annotations = annotationsData as any[]
 
-        console.log("[DataManagementDB] Fetched annotations:", annotations)
+    if (annotations && annotations.length > 0) {
+      // Get image dimensions for coordinate conversion
+      const imgWidth = selectedImage.width || 1
+      const imgHeight = selectedImage.height || 1
 
-        if (annotations && annotations.length > 0) {
-          // Get image dimensions for coordinate conversion
-          const imgWidth = selectedImage.width || 1
-          const imgHeight = selectedImage.height || 1
+      // Convert annotations from YOLO normalized format to pixel coordinates
+      // Backend stores: bbox_x (x_center), bbox_y (y_center), bbox_width, bbox_height (all normalized 0-1)
+      // Convert to: x1, y1, x2, y2 (pixel coordinates)
+      const detections: ImageDetection[] = annotations.map((ann: any) => {
+        const xCenter = parseFloat(ann.bbox_x || 0)
+        const yCenter = parseFloat(ann.bbox_y || 0)
+        const width = parseFloat(ann.bbox_width || 0)
+        const height = parseFloat(ann.bbox_height || 0)
 
-          // Convert annotations from YOLO normalized format to pixel coordinates
-          // Backend stores: bbox_x (x_center), bbox_y (y_center), bbox_width, bbox_height (all normalized 0-1)
-          // Convert to: x1, y1, x2, y2 (pixel coordinates)
-          const detections: ImageDetection[] = annotations.map((ann: any) => {
-            const xCenter = parseFloat(ann.bbox_x || 0)
-            const yCenter = parseFloat(ann.bbox_y || 0)
-            const width = parseFloat(ann.bbox_width || 0)
-            const height = parseFloat(ann.bbox_height || 0)
+        // Convert from YOLO normalized to pixel xyxy format
+        const x1 = (xCenter - width / 2) * imgWidth
+        const y1 = (yCenter - height / 2) * imgHeight
+        const x2 = (xCenter + width / 2) * imgWidth
+        const y2 = (yCenter + height / 2) * imgHeight
 
-            // Convert from YOLO normalized to pixel xyxy format
-            const x1 = (xCenter - width / 2) * imgWidth
-            const y1 = (yCenter - height / 2) * imgHeight
-            const x2 = (xCenter + width / 2) * imgWidth
-            const y2 = (yCenter + height / 2) * imgHeight
+        // Check if this is a ground truth label (from YOLO label file)
+        const isGroundTruth = ann.metadata_?.source === "YOLO label" || ann.metadata?.source === "YOLO label"
 
-            // Check if this is a ground truth label (from YOLO label file)
-            const isGroundTruth = ann.metadata_?.source === "YOLO label" || ann.metadata?.source === "YOLO label"
-
-            return {
-              bbox: { x1, y1, x2, y2 },
-              class: ann.class_name,
-              class_id: ann.class_index || 0,
-              confidence: parseFloat(ann.confidence || 0),
-              isGroundTruth,
-            }
-          })
-
-          setImageDetections(detections)
-        } else {
-          setImageDetections([])
+        return {
+          bbox: { x1, y1, x2, y2 },
+          class: ann.class_name,
+          class_id: ann.class_index || 0,
+          confidence: parseFloat(ann.confidence || 0),
+          isGroundTruth,
         }
-      } catch (error) {
-        console.error("[DataManagementDB] Error fetching annotations:", error)
-        setImageDetections([])
-      }
-    }
+      })
 
-    fetchAnnotations()
-  }, [selectedImage?.id, selectedImage?.width, selectedImage?.height])
+      setImageDetections(detections)
+    } else {
+      setImageDetections([])
+    }
+  }, [selectedImage?.id, selectedImage?.width, selectedImage?.height, annotationsData])
 
   // const totalFiles = datasets.reduce((acc, dataset) => acc + dataset.size, 0)
   // const totalStorage = datasets.reduce(

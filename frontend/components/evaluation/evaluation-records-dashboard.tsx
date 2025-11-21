@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { EvaluationDetailView } from "./EvaluationDetailView"
+import { useModels, useEvaluations } from "@/hooks/api"
 import {
   Table,
   TableBody,
@@ -80,6 +81,10 @@ interface Dataset {
 }
 
 export function EvaluationRecordsDashboard() {
+  // Use custom hooks
+  const { data: modelsData } = useModels(0, 100)
+  const { data: evaluationsData, refetch: refetchEvaluations } = useEvaluations()
+
   const [activeTab, setActiveTab] = useState("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState("all")
@@ -90,26 +95,30 @@ export function EvaluationRecordsDashboard() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
 
   // Data states
-  const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRun[]>([])
-  const [models, setModels] = useState<Record<string, Model>>({})
+  const evaluationRuns = useMemo(() => evaluationsData || [], [evaluationsData])
+  const models = useMemo(() => {
+    if (!modelsData) return {}
+    return modelsData.reduce((acc: Record<string, Model>, model: any) => {
+      acc[model.id] = model
+      return acc
+    }, {})
+  }, [modelsData])
   const [datasets, setDatasets] = useState<Record<string, Dataset>>({})
   const [attackDatasets, setAttackDatasets] = useState<Record<string, Dataset>>({})
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [totalEvaluations, setTotalEvaluations] = useState(0)
+  const totalEvaluations = evaluationRuns.length
   const [currentPage, setCurrentPage] = useState(1)
 
-  // Load data on mount
+  // Load datasets on mount
   useEffect(() => {
-    loadAllData()
+    loadDatasetsData()
   }, [])
 
-  const loadAllData = async () => {
+  const loadDatasetsData = async () => {
     setLoading(true)
     try {
       await Promise.all([
-        loadEvaluationRuns(),
-        loadModels(),
         loadDatasets(),
         loadAttackDatasets()
       ])
@@ -118,40 +127,6 @@ export function EvaluationRecordsDashboard() {
       toast.error("데이터 로딩 실패")
     } finally {
       setLoading(false)
-    }
-  }
-
-  const loadEvaluationRuns = async (page: number = 1) => {
-    try {
-      const response: any = await apiClient.listEvaluationRuns({
-        page: page,
-        page_size: 100  // Backend max limit is 100
-      })
-      console.log("Evaluation runs response:", response)
-      // Check if response has items array (paginated) or is direct array
-      const runs = response.items || response || []
-      setEvaluationRuns(runs)
-      setTotalEvaluations(response.total || runs.length)
-      setCurrentPage(page)
-    } catch (error) {
-      console.error("Failed to load evaluation runs:", error)
-      toast.error("평가 기록을 불러오는데 실패했습니다")
-    }
-  }
-
-  const loadModels = async () => {
-    try {
-      const response: any = await apiClient.getModels()
-      console.log("Models response:", response)
-      const modelArray = response.items || response || []
-      const modelMap = modelArray.reduce((acc: Record<string, Model>, model: Model) => {
-        acc[model.id] = model
-        return acc
-      }, {})
-      setModels(modelMap)
-    } catch (error) {
-      console.error("Failed to load models:", error)
-      toast.error("모델 목록을 불러오는데 실패했습니다")
     }
   }
 
@@ -189,7 +164,10 @@ export function EvaluationRecordsDashboard() {
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    await loadAllData()
+    await Promise.all([
+      refetchEvaluations(),
+      loadDatasetsData()
+    ])
     setRefreshing(false)
     toast.success("데이터 새로고침 완료")
   }
@@ -515,7 +493,7 @@ export function EvaluationRecordsDashboard() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => loadEvaluationRuns(currentPage - 1)}
+                    onClick={() => setCurrentPage(currentPage - 1)}
                     disabled={currentPage === 1}
                     className="bg-slate-700/50 border-white/10 text-white hover:bg-slate-600/50"
                   >
@@ -527,7 +505,7 @@ export function EvaluationRecordsDashboard() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => loadEvaluationRuns(currentPage + 1)}
+                    onClick={() => setCurrentPage(currentPage + 1)}
                     disabled={currentPage >= Math.ceil(totalEvaluations / 100)}
                     className="bg-slate-700/50 border-white/10 text-white hover:bg-slate-600/50"
                   >
