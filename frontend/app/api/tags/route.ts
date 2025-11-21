@@ -6,18 +6,29 @@ export const revalidate = 0
 
 const BACKEND_API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(request: NextRequest) {
   try {
-    const { id } = params
+    const { searchParams } = new URL(request.url)
+    const skip = searchParams.get('skip')
+    const limit = searchParams.get('limit')
+    const search = searchParams.get('search')
 
-    console.log('[/api/models/[id]] GET request - modelId:', id)
+    let queryString = ''
+    const queryParams = new URLSearchParams()
+
+    if (skip) queryParams.append('skip', skip)
+    if (limit) queryParams.append('limit', limit)
+    if (search) queryParams.append('search', search)
+
+    if (queryParams.toString()) {
+      queryString = `?${queryParams.toString()}`
+    }
+
+    console.log('[/api/tags] GET request - query:', queryString)
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/models/${id}`,
+      `${BACKEND_API_URL}/api/v1/tags${queryString}`,
       {
         method: 'GET',
         headers: {
@@ -28,17 +39,17 @@ export async function GET(
 
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
-      console.error('[/api/models/[id]] Backend error:', errorData)
+      console.error('[/api/tags] Backend error:', errorData)
       return NextResponse.json(
-        { error: errorData.detail || 'Failed to fetch model' },
+        { error: errorData.detail || 'Failed to fetch tags' },
         { status: backendResponse.status }
       )
     }
 
-    const model = await backendResponse.json()
-    return NextResponse.json(model)
+    const tags = await backendResponse.json()
+    return NextResponse.json(tags)
   } catch (error) {
-    console.error('[/api/models/[id]] Error:', error)
+    console.error('[/api/tags] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }
@@ -46,40 +57,37 @@ export async function GET(
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest) {
   try {
-    const { id } = params
+    const body = await request.json()
 
-    console.log('[/api/models/[id]] DELETE request - modelId:', id)
+    console.log('[/api/tags] POST request - body:', body)
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/models/${id}`,
+      `${BACKEND_API_URL}/api/v1/tags`,
       {
-        method: 'DELETE',
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify(body),
       }
     )
 
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
-      console.error('[/api/models/[id]] Backend error:', errorData)
+      console.error('[/api/tags] Backend error:', errorData)
       return NextResponse.json(
-        { error: errorData.detail || 'Failed to delete model' },
+        { error: errorData.detail || 'Failed to create tag' },
         { status: backendResponse.status }
       )
     }
 
-    console.log('[/api/models/[id]] Model deleted successfully:', id)
-
-    return new NextResponse(null, { status: 204 })
+    const tag = await backendResponse.json()
+    return NextResponse.json(tag, { status: 201 })
   } catch (error) {
-    console.error('[/api/models/[id]] Error:', error)
+    console.error('[/api/tags] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

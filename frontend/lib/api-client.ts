@@ -1,12 +1,32 @@
 /**
- * API Client for FastAPI Backend
- * 새로운 백엔드 API: /home/jaehyun/army/army_backend/backend
+ * API Client for FastAPI Backend (Proxy Pattern)
+ * All requests go through Next.js API routes (/api/*)
  */
 
-import { getBackendUrl } from './backend-url'
-
-const BACKEND_API_URL = getBackendUrl()
-const API_V1 = '/api/v1'
+import type {
+  User,
+  Model,
+  Dataset,
+  ImageFile,
+  DatasetStats,
+  AttackDataset,
+  AdversarialPatch,
+  GeneratePatchRequest,
+  EvaluationRun,
+  CreateEvaluationRunRequest,
+  EvaluationItem,
+  CompareRobustnessRequest,
+  CompareRobustnessResponse,
+  Annotation,
+  CreateAnnotationRequest,
+  Experiment,
+  Tag,
+  StorageInfo,
+  StorageFile,
+  LoginRequest,
+  LoginResponse,
+  RegisterRequest,
+} from '@/types/api'
 
 interface APIResponse<T> {
   data?: T
@@ -17,7 +37,8 @@ interface APIResponse<T> {
 class APIClient {
   private baseURL: string
 
-  constructor(baseURL: string = BACKEND_API_URL) {
+  constructor(baseURL: string = '') {
+    // Use empty baseURL to make relative requests to Next.js API routes
     this.baseURL = baseURL
   }
 
@@ -77,15 +98,15 @@ class APIClient {
   // Authentication Endpoints
   // ============================================
 
-  async register(data: { email: string; password: string; name?: string }) {
-    return this.request(`${API_V1}/auth/register`, {
+  async register(data: RegisterRequest): Promise<User> {
+    return this.request<User>(`/api/auth/register`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
   }
 
-  async login(data: { email: string; password: string }) {
-    return this.request(`${API_V1}/auth/login-json`, {
+  async login(data: LoginRequest): Promise<LoginResponse> {
+    return this.request<LoginResponse>(`/api/auth/login`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -95,40 +116,40 @@ class APIClient {
   // Dataset CRUD Endpoints (datasets-2d)
   // ============================================
 
-  async getDatasets(skip = 0, limit = 100) {
-    return this.request(`${API_V1}/datasets-2d?skip=${skip}&limit=${limit}`)
+  async getDatasets(skip = 0, limit = 100): Promise<Dataset[]> {
+    return this.request<Dataset[]>(`/api/datasets?skip=${skip}&limit=${limit}`)
   }
 
-  async getDataset(id: string) {
-    return this.request(`${API_V1}/datasets-2d/${id}`)
+  async getDataset(id: string): Promise<Dataset> {
+    return this.request<Dataset>(`/api/datasets/${id}`)
   }
 
-  async createDataset(data: any) {
-    return this.request(`${API_V1}/datasets-2d/`, {
+  async createDataset(data: Partial<Dataset>): Promise<Dataset> {
+    return this.request<Dataset>(`/api/datasets`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
   }
 
-  async updateDataset(id: string, data: any) {
-    return this.request(`${API_V1}/datasets-2d/${id}`, {
+  async updateDataset(id: string, data: Partial<Dataset>): Promise<Dataset> {
+    return this.request<Dataset>(`/api/datasets/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
   }
 
-  async deleteDataset(id: string) {
-    return this.request(`${API_V1}/datasets-2d/${id}`, {
+  async deleteDataset(id: string): Promise<void> {
+    return this.request<void>(`/api/datasets/${id}`, {
       method: 'DELETE',
     })
   }
 
-  async getDatasetImages(datasetId: string, skip = 0, limit = 100) {
-    return this.request(`${API_V1}/datasets-2d/${datasetId}/images?skip=${skip}&limit=${limit}`)
+  async getDatasetImages(datasetId: string, skip = 0, limit = 100): Promise<{ images: ImageFile[], total: number }> {
+    return this.request<{ images: ImageFile[], total: number }>(`/api/datasets/${datasetId}/images?skip=${skip}&limit=${limit}`)
   }
 
-  async deleteImage(imageId: string) {
-    return this.request(`${API_V1}/datasets-2d/images/${imageId}`, {
+  async deleteImage(imageId: string): Promise<void> {
+    return this.request<void>(`/api/datasets/images/${imageId}`, {
       method: 'DELETE',
     })
   }
@@ -144,22 +165,25 @@ class APIClient {
     owner_id?: string
     inference_metadata_path?: string
   }) {
-    return this.request(`${API_V1}/dataset-service/upload-folder`, {
+    // Note: This endpoint uses FormData in the actual route
+    // Keeping JSON format here for backward compatibility
+    return this.request(`/api/datasets/upload-folder`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
   }
 
   async getDatasetStats(id: string) {
-    return this.request(`${API_V1}/dataset-service/${id}/stats`)
+    // TODO: Create /api/datasets/[id]/stats proxy route
+    return this.request(`/api/datasets/${id}/stats`)
   }
 
   async getDatasetDetectionStats(id: string, data: {
     detection_model_id: string  // Frontend parameter name for backward compatibility
     conf_threshold?: number
   }) {
-    // Fixed: Backend expects 'model_id', not 'detection_model_id'
-    return this.request(`${API_V1}/dataset-service/${id}/detection-stats`, {
+    // TODO: Create /api/datasets/[id]/detection-stats proxy route
+    return this.request(`/api/datasets/${id}/detection-stats`, {
       method: 'POST',
       body: JSON.stringify({
         model_id: data.detection_model_id,
@@ -169,7 +193,8 @@ class APIClient {
   }
 
   async deleteDatasetWithFiles(id: string) {
-    return this.request(`${API_V1}/dataset-service/${id}`, {
+    // TODO: Create /api/datasets/[id] DELETE or use existing route
+    return this.request(`/api/datasets/${id}`, {
       method: 'DELETE',
     })
   }
@@ -178,16 +203,16 @@ class APIClient {
   // Models Endpoints
   // ============================================
 
-  async getModels(skip = 0, limit = 100) {
-    return this.request(`${API_V1}/models?skip=${skip}&limit=${limit}`)
+  async getModels(skip = 0, limit = 100): Promise<Model[]> {
+    return this.request<Model[]>(`/api/models?skip=${skip}&limit=${limit}`)
   }
 
-  async getModel(id: string) {
-    return this.request(`${API_V1}/models/${id}`)
+  async getModel(id: string): Promise<Model> {
+    return this.request<Model>(`/api/models/${id}`)
   }
 
-  async createModel(data: any) {
-    return this.request(`${API_V1}/models/`, {
+  async createModel(data: Partial<Model>): Promise<Model> {
+    return this.request<Model>(`/api/models`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -197,24 +222,9 @@ class APIClient {
   // Adversarial Patch Endpoints
   // ============================================
 
-  async generateAdversarialPatch(data: {
-    patch_name: string
-    model_id: string
-    dataset_id: string
-    target_class: string
-    plugin_name?: string
-    patch_size?: number
-    area_ratio?: number
-    epsilon?: number
-    alpha?: number
-    iterations?: number
-    batch_size?: number
-    description?: string
-    created_by?: string
-    session_id?: string
-  }) {
-    // Fixed: Use correct backend endpoint /api/v1/patches/generate
-    return this.request(`${API_V1}/patches/generate`, {
+  async generateAdversarialPatch(data: GeneratePatchRequest): Promise<AdversarialPatch> {
+    // Use existing /api/adversarial-patch/generate proxy route
+    return this.request<AdversarialPatch>(`/api/adversarial-patch/generate`, {
       method: 'POST',
       body: JSON.stringify({
         patch_name: data.patch_name,
@@ -230,20 +240,19 @@ class APIClient {
     })
   }
 
-  async getPatch(patchId: string) {
-    // Fixed: Use correct backend endpoint /api/v1/patches/{id}
-    return this.request(`${API_V1}/patches/${patchId}`)
+  async getPatch(patchId: string): Promise<AdversarialPatch> {
+    // Use existing /api/adversarial-patches proxy route
+    return this.request<AdversarialPatch>(`/api/adversarial-patches/${patchId}`)
   }
 
-  async getPatchImage(patchId: string) {
-    // Fixed: Use correct backend endpoint
-    const url = `${this.baseURL}${API_V1}/patches/${patchId}/image`
-    return url // 이미지 URL 반환
+  async getPatchImage(patchId: string): string {
+    // Return relative URL for proxy pattern
+    return `/api/adversarial-patches/${patchId}/image`
   }
 
   async downloadPatch(patchId: string): Promise<void> {
-    // Fixed: Use correct backend endpoint
-    const url = `${this.baseURL}${API_V1}/patches/${patchId}/download`
+    // Use existing /api/adversarial-patches/[id]/download proxy route
+    const url = `/api/adversarial-patches/${patchId}/download`
     const response = await fetch(url)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -259,13 +268,13 @@ class APIClient {
     window.URL.revokeObjectURL(downloadUrl)
   }
 
-  async listPatches(skip = 0, limit = 100, targetClass?: string) {
-    // Fixed: Use correct backend endpoint
-    let endpoint = `${API_V1}/patches?skip=${skip}&limit=${limit}`
+  async listPatches(skip = 0, limit = 100, targetClass?: string): Promise<AdversarialPatch[]> {
+    // Use existing /api/adversarial-patches proxy route
+    let endpoint = `/api/adversarial-patches?skip=${skip}&limit=${limit}`
     if (targetClass) {
       endpoint += `&target_class=${targetClass}`
     }
-    return this.request(endpoint)
+    return this.request<AdversarialPatch[]>(endpoint)
   }
 
   async generateAttackDataset(data: {
@@ -278,8 +287,8 @@ class APIClient {
     description?: string
     created_by?: string
   }) {
-    // Fixed: Use correct backend endpoint /api/v1/attack-datasets/patch
-    return this.request(`${API_V1}/attack-datasets/patch`, {
+    // TODO: Create /api/attack-datasets/patch proxy route
+    return this.request(`/api/attack-datasets/patch`, {
       method: 'POST',
       body: JSON.stringify({
         attack_name: data.attack_dataset_name,
@@ -291,13 +300,13 @@ class APIClient {
     })
   }
 
-  async getAttackDataset(attackId: string) {
-    return this.request(`${API_V1}/attack-datasets/${attackId}`)
+  async getAttackDataset(attackId: string): Promise<AttackDataset> {
+    return this.request<AttackDataset>(`/api/attack-datasets/${attackId}`)
   }
 
   async downloadAttackDataset(attackId: string): Promise<void> {
-    // Fixed: Use correct backend endpoint
-    const url = `${this.baseURL}${API_V1}/attack-datasets/${attackId}/download`
+    // TODO: Create /api/attack-datasets/[id]/download proxy route
+    const url = `/api/attack-datasets/${attackId}/download`
     const response = await fetch(url)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -313,12 +322,12 @@ class APIClient {
     window.URL.revokeObjectURL(downloadUrl)
   }
 
-  async listAttackDatasets(skip = 0, limit = 100, attackType?: string) {
-    let endpoint = `${API_V1}/attack-datasets?skip=${skip}&limit=${limit}`
+  async listAttackDatasets(skip = 0, limit = 100, attackType?: string): Promise<AttackDataset[]> {
+    let endpoint = `/api/attack-datasets?skip=${skip}&limit=${limit}`
     if (attackType) {
       endpoint += `&attack_type=${attackType}`
     }
-    return this.request(endpoint)
+    return this.request<AttackDataset[]>(endpoint)
   }
 
   // ============================================
@@ -336,8 +345,8 @@ class APIClient {
     created_by?: string
     session_id?: string
   }) {
-    // Fixed: Use unified noise attack endpoint with attack_method parameter
-    return this.request(`${API_V1}/attack-datasets/noise`, {
+    // TODO: Create /api/attack-datasets/noise proxy route
+    return this.request(`/api/attack-datasets/noise`, {
       method: 'POST',
       body: JSON.stringify({
         attack_name: data.attack_dataset_name,
@@ -363,8 +372,8 @@ class APIClient {
     created_by?: string
     session_id?: string
   }) {
-    // Fixed: Use unified noise attack endpoint with attack_method parameter
-    return this.request(`${API_V1}/attack-datasets/noise`, {
+    // TODO: Create /api/attack-datasets/noise proxy route
+    return this.request(`/api/attack-datasets/noise`, {
       method: 'POST',
       body: JSON.stringify({
         attack_name: data.attack_dataset_name,
@@ -386,19 +395,19 @@ class APIClient {
   // Evaluation Endpoints
   // ============================================
 
-  async createEvaluationRun(data: any) {
+  async createEvaluationRun(data: CreateEvaluationRunRequest): Promise<EvaluationRun> {
     // Remove null/undefined values to avoid database constraint violations
     const cleanData = Object.fromEntries(
       Object.entries(data).filter(([_, v]) => v != null)
     )
-    return this.request(`${API_V1}/evaluation/runs`, {
+    return this.request<EvaluationRun>(`/api/evaluations`, {
       method: 'POST',
       body: JSON.stringify(cleanData),
     })
   }
 
-  async getEvaluationRun(runId: string) {
-    return this.request(`${API_V1}/evaluation/runs/${runId}`)
+  async getEvaluationRun(runId: string): Promise<EvaluationRun> {
+    return this.request<EvaluationRun>(`/api/evaluations/${runId}`)
   }
 
   async listEvaluationRuns(params: {
@@ -409,25 +418,25 @@ class APIClient {
     model_id?: string
     base_dataset_id?: string
     attack_dataset_id?: string
-  }) {
+  }): Promise<EvaluationRun[]> {
     const queryParams = new URLSearchParams()
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined) {
         queryParams.append(key, String(value))
       }
     })
-    return this.request(`${API_V1}/evaluation/runs?${queryParams.toString()}`)
+    return this.request<EvaluationRun[]>(`/api/evaluations?${queryParams.toString()}`)
   }
 
-  async updateEvaluationRun(runId: string, data: any) {
-    return this.request(`${API_V1}/evaluation/runs/${runId}`, {
+  async updateEvaluationRun(runId: string, data: Partial<EvaluationRun>): Promise<EvaluationRun> {
+    return this.request<EvaluationRun>(`/api/evaluations/${runId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
   }
 
-  async deleteEvaluationRun(runId: string) {
-    return this.request(`${API_V1}/evaluation/runs/${runId}`, {
+  async deleteEvaluationRun(runId: string): Promise<void> {
+    return this.request<void>(`/api/evaluations/${runId}`, {
       method: 'DELETE',
     })
   }
@@ -451,7 +460,7 @@ class APIClient {
     // Build request body - only include session_id if provided
     const body = params.session_id ? { session_id: params.session_id } : {}
 
-    return this.request(`${API_V1}/evaluation/runs/${runId}/execute?${queryParams.toString()}`, {
+    return this.request(`/api/evaluations/${runId}/execute?${queryParams.toString()}`, {
       method: 'POST',
       body: JSON.stringify(body),
     })
@@ -461,7 +470,8 @@ class APIClient {
     clean_run_id: string
     adv_run_id: string
   }) {
-    return this.request(`${API_V1}/evaluation/runs/compare-robustness`, {
+    // TODO: Create /api/evaluations/compare-robustness proxy route
+    return this.request(`/api/evaluations/compare-robustness`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -475,11 +485,12 @@ class APIClient {
     if (datasetType) {
       params.append('dataset_type', datasetType)
     }
-    return this.request(`${API_V1}/evaluation/runs/${runId}/items?${params.toString()}`)
+    // TODO: Create /api/evaluations/[id]/items proxy route
+    return this.request(`/api/evaluations/${runId}/items?${params.toString()}`)
   }
 
   async getEvaluationPRCurveData(runId: string) {
-    return this.request(`${API_V1}/evaluation/runs/${runId}/pr-curve-data`)
+    return this.request(`/api/evaluations/${runId}/pr-curve-data`)
   }
 
   async getEvaluationImagesWithPredictions(runId: string, page = 1, pageSize = 20, datasetType?: 'base' | 'attack') {
@@ -490,11 +501,13 @@ class APIClient {
     if (datasetType) {
       params.append('dataset_type', datasetType)
     }
-    return this.request(`${API_V1}/evaluation/runs/${runId}/images-with-predictions?${params.toString()}`)
+    // TODO: Create /api/evaluations/[id]/images-with-predictions proxy route
+    return this.request(`/api/evaluations/${runId}/images-with-predictions?${params.toString()}`)
   }
 
   async compareEvaluationImages(cleanRunId: string, advRunId: string, page = 1, pageSize = 20) {
-    return this.request(`${API_V1}/evaluation/runs/compare-images?clean_run_id=${cleanRunId}&adv_run_id=${advRunId}&page=${page}&page_size=${pageSize}`)
+    // TODO: Create /api/evaluations/compare-images proxy route
+    return this.request(`/api/evaluations/compare-images?clean_run_id=${cleanRunId}&adv_run_id=${advRunId}&page=${page}&page_size=${pageSize}`)
   }
 
   // ============================================
@@ -502,29 +515,34 @@ class APIClient {
   // ============================================
 
   async createExperiment(data: any) {
-    return this.request(`${API_V1}/experiments/`, {
+    // TODO: Create /api/experiments proxy route
+    return this.request(`/api/experiments`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
   }
 
   async getExperiment(id: string) {
-    return this.request(`${API_V1}/experiments/${id}`)
+    // TODO: Create /api/experiments/[id] proxy route
+    return this.request(`/api/experiments/${id}`)
   }
 
   async listExperiments(skip = 0, limit = 100) {
-    return this.request(`${API_V1}/experiments?skip=${skip}&limit=${limit}`)
+    // TODO: Create /api/experiments proxy route
+    return this.request(`/api/experiments?skip=${skip}&limit=${limit}`)
   }
 
   async updateExperiment(id: string, data: any) {
-    return this.request(`${API_V1}/experiments/${id}`, {
+    // TODO: Create /api/experiments/[id] proxy route
+    return this.request(`/api/experiments/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
   }
 
   async deleteExperiment(id: string) {
-    return this.request(`${API_V1}/experiments/${id}`, {
+    // TODO: Create /api/experiments/[id] proxy route
+    return this.request(`/api/experiments/${id}`, {
       method: 'DELETE',
     })
   }
@@ -534,7 +552,7 @@ class APIClient {
   // ============================================
 
   async listTags(options?: { skip?: number; limit?: number; search?: string }) {
-    let endpoint = `${API_V1}/tags`
+    let endpoint = `/api/tags`
     const params = new URLSearchParams()
 
     if (options?.skip !== undefined) params.append('skip', options.skip.toString())
@@ -543,29 +561,34 @@ class APIClient {
 
     if (params.toString()) endpoint += `?${params.toString()}`
 
+    // TODO: Create /api/tags proxy route
     return this.request(endpoint)
   }
 
   async createTag(data: { name: string; color?: string; description?: string }) {
-    return this.request(`${API_V1}/tags`, {
+    // TODO: Create /api/tags proxy route
+    return this.request(`/api/tags`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
   }
 
   async getTag(id: string) {
-    return this.request(`${API_V1}/tags/${id}`)
+    // TODO: Create /api/tags/[id] proxy route
+    return this.request(`/api/tags/${id}`)
   }
 
   async updateTag(id: string, data: { name?: string; color?: string; description?: string }) {
-    return this.request(`${API_V1}/tags/${id}`, {
+    // TODO: Create /api/tags/[id] proxy route
+    return this.request(`/api/tags/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     })
   }
 
   async deleteTag(id: string) {
-    return this.request(`${API_V1}/tags/${id}`, {
+    // TODO: Create /api/tags/[id] proxy route
+    return this.request(`/api/tags/${id}`, {
       method: 'DELETE',
     })
   }
@@ -580,8 +603,8 @@ class APIClient {
       annotation_type?: 'bbox' | 'polygon' | 'keypoint' | 'segmentation'
       min_confidence?: number
     }
-  ) {
-    let endpoint = `${API_V1}/annotations/image/${imageId}`
+  ): Promise<Annotation[]> {
+    let endpoint = `/api/annotations/image/${imageId}`
     const params = new URLSearchParams()
 
     if (options?.annotation_type) {
@@ -595,14 +618,14 @@ class APIClient {
       endpoint += `?${params.toString()}`
     }
 
-    return this.request(endpoint)
+    return this.request<Annotation[]>(endpoint)
   }
 
   async getDatasetAnnotationsSummary(
     datasetId: string,
     minConfidence?: number
   ) {
-    let endpoint = `${API_V1}/annotations/dataset/${datasetId}`
+    let endpoint = `/api/annotations/dataset/${datasetId}`
     if (minConfidence !== undefined) {
       endpoint += `?min_confidence=${minConfidence}`
     }
@@ -626,7 +649,8 @@ class APIClient {
       metadata?: Record<string, any>
     }>
   ) {
-    return this.request(`${API_V1}/annotations/bulk?image_id=${imageId}`, {
+    // TODO: Create /api/annotations/bulk proxy route
+    return this.request(`/api/annotations/bulk?image_id=${imageId}`, {
       method: 'POST',
       body: JSON.stringify(annotations),
     })
@@ -636,10 +660,11 @@ class APIClient {
     imageId: string,
     annotationType?: 'bbox' | 'polygon' | 'keypoint' | 'segmentation'
   ) {
-    let endpoint = `${API_V1}/annotations/image/${imageId}`
+    let endpoint = `/api/annotations/image/${imageId}`
     if (annotationType) {
       endpoint += `?annotation_type=${annotationType}`
     }
+    // Use existing /api/annotations/image/[id] proxy route
     return this.request(endpoint, {
       method: 'DELETE',
     })
@@ -650,13 +675,15 @@ class APIClient {
   // ============================================
 
   async getStorageInfo() {
-    return this.request(`${API_V1}/storage/info`)
+    // TODO: Create /api/storage/info proxy route
+    return this.request(`/api/storage/info`)
   }
 
   async listStorageFiles(path?: string) {
     const endpoint = path
-      ? `${API_V1}/storage/list?path=${encodeURIComponent(path)}`
-      : `${API_V1}/storage/list`
+      ? `/api/storage/list?path=${encodeURIComponent(path)}`
+      : `/api/storage/list`
+    // TODO: Create /api/storage/list proxy route
     return this.request(endpoint)
   }
 }

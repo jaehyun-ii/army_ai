@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useEffect, useState, useRef } from 'react'
-import { apiClient } from '@/lib/api-client'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
@@ -48,10 +47,17 @@ export function BBoxDebugViewer({
         setLoading(true)
         setError(null)
 
-        const data = await apiClient.getImageAnnotations(imageId, {
+        const params = new URLSearchParams({
           annotation_type: 'bbox',
-          min_confidence: minConfidence,
-        }) as Annotation[]
+          min_confidence: minConfidence.toString(),
+        })
+
+        const response = await fetch(`/api/annotations/image/${imageId}?${params}`)
+        if (!response.ok) {
+          throw new Error('Failed to fetch annotations')
+        }
+
+        const data = await response.json() as Annotation[]
 
         console.log('[BBoxDebug] Fetched annotations:', data)
         setAnnotations(data)

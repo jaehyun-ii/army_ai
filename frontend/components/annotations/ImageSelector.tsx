@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { apiClient } from '@/lib/api-client'
 import { AnnotatedImageViewer } from './AnnotatedImageViewer'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -41,7 +40,12 @@ export function ImageSelector({ datasetId, className = '' }: ImageSelectorProps)
         setLoading(true)
         setError(null)
 
-        const response = await apiClient.getDatasetImages(datasetId) as any
+        const res = await fetch(`/api/datasets/${datasetId}/images`)
+        if (!res.ok) {
+          throw new Error('Failed to fetch images')
+        }
+
+        const response = await res.json()
         setImages(response.images || response || [])
 
         // 첫 번째 이미지를 자동으로 선택

@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useEffect, useState, useRef } from 'react'
-import { apiClient } from '@/lib/api-client'
 import { ImageIcon } from 'lucide-react'
 
 interface Annotation {
@@ -99,10 +98,17 @@ export function ImageWithBBox({
 
     const fetchAnnotations = async () => {
       try {
-        const data = await apiClient.getImageAnnotations(imageId, {
+        const params = new URLSearchParams({
           annotation_type: 'bbox',
-          min_confidence: minConfidence,
-        }) as Annotation[]
+          min_confidence: minConfidence.toString(),
+        })
+
+        const response = await fetch(`/api/annotations/image/${imageId}?${params}`)
+        if (!response.ok) {
+          throw new Error('Failed to fetch annotations')
+        }
+
+        const data = await response.json() as Annotation[]
 
         // 타겟 클래스가 지정되어 있으면 필터링
         const filteredData = targetClass
