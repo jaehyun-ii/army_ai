@@ -44,9 +44,6 @@ opencv-python-headless>=4.10.0
 # NumPy: Already in base image ✅
 # Pillow: Already in base image ✅
 
-# MMDetection dependencies
-# Note: Installed via mim in Dockerfile due to binary compatibility issues
-
 # Scikit-learn
 scikit-learn>=1.5.0
 
