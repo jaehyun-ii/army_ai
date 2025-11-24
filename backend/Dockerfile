@@ -9,7 +9,7 @@
 # ===============================================
 
 # 1. CUDA 13.0.2, Ubuntu 22.04 기반 이미지 사용
-FROM nvidia/cuda:13.0.2-devel-ubuntu22.04
+FROM nvcr.io/nvidia/pytorch:24.04-py3
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -25,12 +25,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 2. Python 3.10 및 필수 시스템 패키지 설치
-RUN apt-get update && \
-    apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-dev \
+# 2.  필수 시스템 패키지 설치
+RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
@@ -58,12 +54,6 @@ RUN apt-get update && \
 
 # 3. pip 업그레이드
 RUN pip install --upgrade pip setuptools wheel
-
-# 4. 최신 PyTorch(2.9.0+, CUDA 12/13 지원) 설치
-RUN pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
-
-# 5. TensorRT 설치
-RUN pip install tensorrt
 
 # 6. 애플리케이션 의존성 설치
 COPY requirements.txt .
