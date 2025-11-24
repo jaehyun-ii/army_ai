@@ -3,13 +3,13 @@
 # FastAPI + Custom CUDA/PyTorch Stack
 # ===============================================
 # Ubuntu: 22.04
-# CUDA Toolkit: 13.0.2
-# PyTorch: 2.9.0+
+# CUDA Toolkit: 12.6
+# PyTorch: 2.5.0+
 # Python: 3.10
 # ===============================================
 
-# 1. CUDA 13.0.2, Ubuntu 22.04 기반 이미지 사용
-FROM nvcr.io/nvidia/pytorch:24.04-py3
+# 1. CUDA 12.6, Ubuntu 22.04 기반 이미지 사용
+FROM nvcr.io/nvidia/pytorch:25.10-py3
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -25,44 +25,38 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 2.  필수 시스템 패키지 설치
+# 2. 필수 시스템 패키지 설치 (NGC 이미지에 없는 것만)
+# NOTE: build-essential, cmake, git, wget, curl, ca-certificates,
+#       OpenCV dependencies, video codecs are already in NGC image
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    wget \
-    curl \
     libpq-dev \
-    libssl-dev \
-    libffi-dev \
-    libjpeg-dev \
-    libpng-dev \
-    ca-certificates \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    libgstreamer1.0-0 \
-    libavcodec-dev \
-    libavformat-dev \
-    libswscale-dev && \
-    ln -sf /usr/bin/python3 /usr/bin/python && \
-    ln -sf /usr/bin/pip3 /usr/bin/pip && \
+    curl \
+    libgl1 \
+    libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
-# 3. pip 업그레이드
-RUN pip install --upgrade pip setuptools wheel
+# 3. pip 업그레이드 (Python 3.12 호환 setuptools 설치)
+RUN pip install --upgrade pip setuptools>=75.0.0 wheel
 
 # 6. 애플리케이션 의존성 설치
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install -U openmim
-RUN mim install mmcv==2.1.0
-RUN mim install mmengine==0.10.7
-RUN mim install mmdet==3.3.0
+# Install mmengine (required before mmcv)
+RUN pip install mmengine==0.10.7
+
+# Install mmcv from source (v2.1.0)
+RUN git clone https://github.com/open-mmlab/mmcv.git && \
+    cd mmcv && \
+    git checkout v2.1.0 && \
+    pip install -r requirements/optional.txt && \
+    export MMCV_WITH_OPS=1 && \
+    export FORCE_CUDA=1 && \
+    pip install -e . --no-build-isolation -v && \
+    cd ..
+
+# Install mmdet
+RUN pip install mmdet==3.3.0
 
 # 7. 애플리케이션 코드 복사
 COPY app ./app

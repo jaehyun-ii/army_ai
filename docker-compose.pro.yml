@@ -1,8 +1,11 @@
 # ===============================================
-# Army AI Platform - Development Docker Compose
+# Army AI Platform - Docker Compose
 # ===============================================
-# Hot reload enabled for rapid development
-# Usage: docker-compose -f docker-compose.dev.yml up
+# GPU-accelerated deployment with NVIDIA NGC PyTorch
+# Base Image: nvidia/cuda:13.0.2-devel-ubuntu22.04
+# Container: Ubuntu 22.04, CUDA 13.0.2, PyTorch 2.9.0+, Python 3.10
+# Requirements: NVIDIA GPU, nvidia-container-toolkit
+# Usage: docker-compose up --build -d
 # ===============================================
 
 services:
@@ -11,7 +14,7 @@ services:
   # =====================
   postgres:
     image: postgres:15-alpine
-    container_name: army_ai_postgres_dev
+    container_name: army_ai_postgres
     restart: unless-stopped
     env_file:
       - .env
@@ -23,7 +26,7 @@ services:
     ports:
       - "${POSTGRES_PORT}:5432"
     volumes:
-      - postgres_data_dev:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
       - ./database/complete_schema.sql:/schema/complete_schema.sql:ro
     healthcheck:
@@ -33,18 +36,18 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - army_ai_network_dev
+      - army_ai_network
 
   # =====================
   # Backend (FastAPI) - GPU Enabled
-  # Development mode with code hot reload
+  # Using NVIDIA NGC PyTorch Container
   # =====================
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: army_ai_backend_dev
-    container_name: army_ai_backend_dev
+    image: army_ai_backend
+    container_name: army_ai_backend
     restart: unless-stopped
     env_file:
       - .env
@@ -63,10 +66,10 @@ services:
 
       # Application
       APP_NAME: ${APP_NAME}
-      DEBUG: "True"  # Development mode
+      DEBUG: ${DEBUG}
       API_PREFIX: ${API_PREFIX}
-      LOG_LEVEL: DEBUG  # More verbose logging
-      ENVIRONMENT: development
+      LOG_LEVEL: ${LOG_LEVEL}
+      ENVIRONMENT: ${ENVIRONMENT}
 
       # Storage
       STORAGE_ROOT: /storage
@@ -79,9 +82,7 @@ services:
       - "${BACKEND_PORT}:8000"
     volumes:
       - ./storage:/storage:rw
-      - backend_logs_dev:/app/logs
-      # Hot reload: mount source code (uncomment if backend supports hot reload)
-      # - ./backend:/app:rw
+      - backend_logs:/app/logs
     devices:
       # Camera devices access
       - /dev/video0:/dev/video0
@@ -99,27 +100,23 @@ services:
       retries: 3
       start_period: 60s
     networks:
-      - army_ai_network_dev
+      - army_ai_network
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 1  # Number of GPUs
               capabilities: [gpu]
 
   # =====================
-  # Frontend (Next.js) - Development Mode
-  # Hot reload enabled with volume mounts
+  # Frontend (Next.js)
   # =====================
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
-      args:
-        NODE_ENV: development
-    image: army_ai_frontend_dev
-    container_name: army_ai_frontend_dev
+      dockerfile: Dockerfile
+    container_name: army_ai_frontend
     restart: unless-stopped
     env_file:
       - .env
@@ -131,73 +128,58 @@ services:
       NEXTAUTH_URL: ${NEXTAUTH_URL}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       JWT_SECRET: ${JWT_SECRET}
-      NODE_ENV: development  # Development mode
+      NODE_ENV: ${NODE_ENV}
 
       # API URLs (브라우저에서 접속 - 클라이언트사이드)
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
       NEXT_PUBLIC_BACKEND_API_URL: ${NEXT_PUBLIC_API_URL}
 
-      # Backend URL (서버사이드 API 라우트 통신용)
+      # Backend URL (서버사이드 API 라우트 통신용 - 최우선)
       BACKEND_API_URL: ${INTERNAL_BACKEND_URL}
       BACKEND_URL: ${INTERNAL_BACKEND_URL}
-
-      # Next.js Dev Server
-      WATCHPACK_POLLING: "true"  # Enable file watching in Docker
-      CHOKIDAR_USEPOLLING: "true"  # Fallback file watching
-
     ports:
       - "${FRONTEND_PORT}:3000"
     volumes:
-      # Hot reload: mount source code
-      - ./frontend:/app:rw
-      # Use named volume for node_modules to improve performance
-      - frontend_node_modules:/app/node_modules
-      # Persistent volumes
-      - frontend_uploads_dev:/app/uploads
-      - frontend_logs_dev:/app/logs
-      # Cache for Next.js
-      - frontend_next_cache:/app/.next
+      - frontend_uploads:/app/uploads
+      - frontend_logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
-      - army_ai_network_dev
-    command: npm run dev
+      - army_ai_network
 
 # =====================
 # Networks
 # =====================
 networks:
-  army_ai_network_dev:
+  army_ai_network:
     driver: bridge
-    name: army_ai_network_dev
+    name: army_ai_network
 
 # =====================
 # Volumes
 # =====================
 volumes:
-  postgres_data_dev:
+  postgres_data:
     driver: local
-    name: army_ai_postgres_data_dev
+    name: army_ai_postgres_data
 
-  backend_logs_dev:
+  backend_logs:
     driver: local
-    name: army_ai_backend_logs_dev
+    name: army_ai_backend_logs
 
-  frontend_node_modules:
+  frontend_uploads:
     driver: local
-    name: army_ai_frontend_node_modules
+    name: army_ai_frontend_uploads
 
-  frontend_uploads_dev:
+  frontend_logs:
     driver: local
-    name: army_ai_frontend_uploads_dev
-
-  frontend_logs_dev:
-    driver: local
-    name: army_ai_frontend_logs_dev
-
-  frontend_next_cache:
-    driver: local
-    name: army_ai_frontend_next_cache
+    name: army_ai_frontend_logs

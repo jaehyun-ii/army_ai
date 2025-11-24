@@ -1,9 +1,11 @@
 # ===============================================
 # Army AI Platform - GPU Requirements
-# For use with nvcr.io/nvidia/pytorch:24.04-py3
+# For use with nvcr.io/nvidia/pytorch:25.10-py3
 # ===============================================
-# NOTE: PyTorch, torchvision, torchaudio, CUDA are
-#       already included in the NGC base image!
+# NOTE: The following are already included in NGC base image:
+#       PyTorch, torchvision, torchaudio, CUDA, cuDNN,
+#       NumPy, Pillow, matplotlib, pandas, scikit-learn,
+#       tqdm, pyyaml, scipy, opencv-python
 
 # Core Dependencies
 # ==================
@@ -32,27 +34,22 @@ python-dateutil>=2.9.0
 
 # Environment & Config
 python-dotenv>=1.0.1
-pyyaml>=6.0.2
+# pyyaml: Already in NGC base image
 
 # Image Processing
-opencv-python-headless>=4.10.0
+# opencv-python: Already in NGC base image
 
 # ===============================================
 # Deep Learning Libraries
 # ===============================================
-# PyTorch, torchvision, torchaudio: Already in base image ✅
-# NumPy: Already in base image ✅
-# Pillow: Already in base image ✅
-
-# Scikit-learn
-scikit-learn>=1.5.0
-
-# Matplotlib (for visualization)
-matplotlib>=3.9.0
-
-# Progress bar & Data processing
-tqdm>=4.66.0
-pandas>=2.1.0
+# PyTorch, torchvision, torchaudio, Pillow: Already in NGC base image ✅
+# NumPy: Already in NGC base image
+# opencv-python: Already in NGC base image
+ultralytics==8.3.40
+# scikit-learn: Already in NGC base image
+# matplotlib: Already in NGC base image
+# tqdm: Already in NGC base image
+# pandas: Already in NGC base image
 
 # System monitoring
 psutil>=6.0.0
