@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> List[str]:
         """동적으로 CORS origins 생성"""
-        return [
+        origins = [
             f"http://localhost:{self.FRONTEND_PORT}",
             f"http://localhost:{self.BACKEND_PORT}",
             "http://localhost:3000",  # 개발용
@@ -138,7 +138,17 @@ class Settings(BaseSettings):
             f"http://127.0.0.1:{self.BACKEND_PORT}",
             "http://127.0.0.1:3000",  # 개발용
             "http://127.0.0.1:8000",  # 개발용
+            # 로컬 네트워크 호스트명 지원
+            f"http://spark-jaehyun.local:{self.FRONTEND_PORT}",
+            f"http://spark-jaehyun.local:{self.BACKEND_PORT}",
         ]
+
+        # 환경변수에서 추가 origins 읽기 (쉼표로 구분)
+        extra_origins = os.getenv("CORS_EXTRA_ORIGINS", "")
+        if extra_origins:
+            origins.extend([origin.strip() for origin in extra_origins.split(",")])
+
+        return origins
 
     CORS_ORIGINS: List[str] = []  # 초기화용, @property 사용
     CORS_ALLOW_CREDENTIALS: bool = True

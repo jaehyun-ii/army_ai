@@ -191,30 +191,43 @@ export function SystemStatusBar() {
           {/* GPU Section - Supports multiple GPUs (up to 4) */}
           {stats?.gpu && stats.gpu.available && stats.gpu.gpus && (
             <div className="flex items-center space-x-3 border-l border-white/10 pl-4">
-              {stats.gpu.gpus.slice(0, 4).map((gpu) => (
-                <div key={gpu.id} className="flex items-center space-x-2">
-                  <Zap className={`w-4 h-4 ${getStatusColor(gpu.load_percent)}`} />
-                  <div className="flex flex-col">
-                    <div className="flex items-center space-x-1">
-                      <span className="text-xs text-slate-300">GPU{gpu.id}</span>
-                      <span className={`text-xs font-bold ${getStatusColor(gpu.load_percent)}`}>
-                        {gpu.load_percent.toFixed(0)}%
-                      </span>
-                      {gpu.temperature_c > 0 && (
-                        <span className="text-xs text-slate-500">
-                          {gpu.temperature_c.toFixed(0)}°
+              {stats.gpu.gpus.slice(0, 4).map((gpu) => {
+                const loadPercent = gpu.load_percent ?? 0
+                const hasMemory = gpu.memory_total_mb != null && gpu.memory_used_mb != null
+                const memoryDisplay = hasMemory
+                  ? `${(gpu.memory_used_mb! / 1024).toFixed(1)}/${(gpu.memory_total_mb! / 1024).toFixed(0)}G`
+                  : 'N/A'
+
+                return (
+                  <div key={gpu.id} className="flex items-center space-x-2">
+                    <Zap className={`w-4 h-4 ${getStatusColor(loadPercent)}`} />
+                    <div className="flex flex-col">
+                      <div className="flex items-center space-x-1">
+                        <span className="text-xs text-slate-300">GPU{gpu.id}</span>
+                        <span className={`text-xs font-bold ${getStatusColor(loadPercent)}`}>
+                          {loadPercent.toFixed(0)}%
                         </span>
-                      )}
-                    </div>
-                    <div className="w-20">
-                      <Progress value={gpu.load_percent} className="h-1.5" />
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {(gpu.memory_used_mb / 1024).toFixed(1)}/{(gpu.memory_total_mb / 1024).toFixed(0)}G
+                        {gpu.temperature_c != null && gpu.temperature_c > 0 && (
+                          <span className="text-xs text-slate-500">
+                            {gpu.temperature_c.toFixed(0)}°
+                          </span>
+                        )}
+                        {gpu.power_watts != null && gpu.power_watts > 0 && (
+                          <span className="text-xs text-slate-500">
+                            {gpu.power_watts.toFixed(0)}W
+                          </span>
+                        )}
+                      </div>
+                      <div className="w-20">
+                        <Progress value={loadPercent} className="h-1.5" />
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {memoryDisplay}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
               {stats.gpu.gpus.length > 4 && (
                 <Badge variant="outline" className="text-xs">
                   +{stats.gpu.gpus.length - 4} more

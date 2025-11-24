@@ -56,3 +56,4 @@ pandas>=2.1.0
 
 # System monitoring
 psutil>=6.0.0
+nvidia-ml-py>=12.560.30  # pynvml - NVIDIA Management Library for GPU monitoring

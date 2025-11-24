@@ -13,6 +13,7 @@ import type {
   AdversarialPatch,
   GeneratePatchRequest,
   EvaluationRun,
+  EvaluationRunListResponse,
   CreateEvaluationRunRequest,
   EvaluationItem,
   CompareRobustnessRequest,
@@ -418,14 +419,14 @@ class APIClient {
     model_id?: string
     base_dataset_id?: string
     attack_dataset_id?: string
-  }): Promise<EvaluationRun[]> {
+  }): Promise<EvaluationRunListResponse> {
     const queryParams = new URLSearchParams()
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined) {
         queryParams.append(key, String(value))
       }
     })
-    return this.request<EvaluationRun[]>(`/api/evaluations?${queryParams.toString()}`)
+    return this.request<EvaluationRunListResponse>(`/api/evaluations?${queryParams.toString()}`)
   }
 
   async updateEvaluationRun(runId: string, data: Partial<EvaluationRun>): Promise<EvaluationRun> {

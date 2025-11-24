@@ -58,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const login = async (username: string, password: string) => {
+    console.log('🔐 Login attempt started for:', username)
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -68,22 +69,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ username, password }),
       })
 
+      console.log('📡 API response status:', response.status)
       const data = await response.json()
+      console.log('📦 API response data:', data)
 
       if (!response.ok || !data.success) {
+        console.error('❌ Login failed:', data.error)
         throw new Error(data.error || 'Login failed')
       }
 
+      console.log('✅ Login successful, saving token and user data')
       localStorage.setItem('token', data.token)
       setUser(data.user)
 
-      // 상태 업데이트 후 리다이렉션
-      setTimeout(() => {
-        window.location.href = '/dashboard'
-      }, 100)
+      console.log('🚀 Redirecting to dashboard...')
+      // 즉시 리다이렉션 (setTimeout 제거)
+      router.push('/dashboard')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Login failed'
-      console.error('Login error:', error)
+      console.error('❌ Login error:', error)
       throw new Error(message)
     }
   }

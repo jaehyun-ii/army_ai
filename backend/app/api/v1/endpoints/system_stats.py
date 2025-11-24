@@ -3,11 +3,12 @@ System statistics endpoints.
 Provides HTTP and SSE endpoints for real-time system monitoring.
 """
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, PlainTextResponse
 from typing import Optional
 import logging
 import asyncio
 import json
+import subprocess
 
 from app.services.system_stats_service import system_stats_service
 
@@ -154,4 +155,55 @@ async def get_network_stats():
         return JSONResponse(
             status_code=500,
             content={"error": "Failed to retrieve network statistics", "detail": str(e)}
+        )
+
+
+@router.get("/debug/nvidia-smi")
+async def debug_nvidia_smi():
+    """Debug endpoint to view raw nvidia-smi output."""
+    try:
+        # Run nvidia-smi with XML output
+        result = subprocess.run(
+            ['nvidia-smi', '-q', '-x'],
+            capture_output=True,
+            timeout=5,
+            text=True
+        )
+
+        return PlainTextResponse(
+            content=f"=== nvidia-smi -q -x ===\nReturn code: {result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}",
+            media_type="text/plain"
+        )
+    except Exception as e:
+        return PlainTextResponse(
+            content=f"Error running nvidia-smi: {str(e)}",
+            status_code=500
+        )
+
+
+@router.get("/debug/gputil")
+async def debug_gputil():
+    """Debug endpoint to view GPUtil output."""
+    try:
+        import GPUtil
+        gpus = GPUtil.getGPUs()
+
+        debug_info = f"GPUtil found {len(gpus)} GPU(s)\n\n"
+
+        for gpu in gpus:
+            debug_info += f"GPU {gpu.id}:\n"
+            debug_info += f"  Name: {gpu.name}\n"
+            debug_info += f"  Load: {gpu.load}\n"
+            debug_info += f"  Memory Total: {gpu.memoryTotal} MB\n"
+            debug_info += f"  Memory Used: {gpu.memoryUsed} MB\n"
+            debug_info += f"  Memory Free: {gpu.memoryFree} MB\n"
+            debug_info += f"  Temperature: {gpu.temperature} C\n"
+            debug_info += f"  UUID: {gpu.uuid}\n"
+            debug_info += "\n"
+
+        return PlainTextResponse(content=debug_info)
+    except Exception as e:
+        return PlainTextResponse(
+            content=f"Error with GPUtil: {str(e)}",
+            status_code=500
         )

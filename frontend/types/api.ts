@@ -235,6 +235,13 @@ export interface EvaluationRun {
   error_message?: string
 }
 
+export interface EvaluationRunListResponse {
+  items: EvaluationRun[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface CreateEvaluationRunRequest {
   run_name?: string
   phase: EvaluationPhase

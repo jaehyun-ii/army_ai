@@ -1,0 +1,41 @@
+# ===============================================
+# Army AI Platform - Frontend Development Dockerfile
+# Next.js 14 + React - Hot Reload Enabled
+# ===============================================
+
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install dependencies for better compatibility
+RUN apk add --no-cache libc6-compat curl
+
+# Set environment variables
+ENV NODE_ENV=development
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies (including dev dependencies)
+RUN npm install
+
+# Copy the rest of the application
+# Note: In development, source files are mounted as volumes
+# This COPY is mainly for the initial build
+COPY . .
+
+# Create directories with proper permissions
+RUN mkdir -p /app/.next /app/uploads /app/logs && \
+    chmod -R 777 /app/.next /app/uploads /app/logs
+
+# Expose port
+EXPOSE 3000
+
+# Run as root in development to avoid permission issues with volumes
+# In production, we use non-root user for security
+
+# Start development server with hot reload
+CMD ["npm", "run", "dev"]

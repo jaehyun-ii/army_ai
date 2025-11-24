@@ -95,7 +95,11 @@ export function EvaluationRecordsDashboard() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
 
   // Data states
-  const evaluationRuns = useMemo(() => evaluationsData || [], [evaluationsData])
+  const evaluationRuns = useMemo(() => {
+    // Backend returns { items: [], total, page, page_size }
+    if (!evaluationsData) return []
+    return Array.isArray(evaluationsData) ? evaluationsData : evaluationsData.items || []
+  }, [evaluationsData])
   const models = useMemo(() => {
     if (!modelsData) return {}
     return modelsData.reduce((acc: Record<string, Model>, model: any) => {

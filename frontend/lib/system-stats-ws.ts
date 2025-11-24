@@ -38,12 +38,13 @@ export interface SystemStats {
     gpus?: Array<{
       id: number
       name: string
-      load_percent: number
-      memory_total_mb: number
-      memory_used_mb: number
-      memory_free_mb: number
-      memory_percent: number
-      temperature_c: number
+      load_percent: number | null
+      memory_total_mb: number | null
+      memory_used_mb: number | null
+      memory_free_mb: number | null
+      memory_percent: number | null
+      temperature_c: number | null
+      power_watts?: number | null
     }>
     error?: string
   } | null

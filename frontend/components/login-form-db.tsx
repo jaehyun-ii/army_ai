@@ -26,17 +26,25 @@ export function LoginFormDB() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    e.stopPropagation()
+
+    console.log('🎯 LoginFormDB: handleSubmit called')
+    console.log('📝 Form data:', { username: formData.username, password: '***' })
+
     setError("")
     setLoading(true)
 
     try {
+      console.log('🔄 LoginFormDB: Calling login function...')
       await login(formData.username, formData.password)
+      console.log('✅ LoginFormDB: Login function completed successfully')
     } catch (error) {
-      console.error('Login error:', error)
+      console.error('❌ LoginFormDB: Login error:', error)
       const message = error instanceof Error ? error.message : '로그인 중 오류가 발생했습니다.'
       setError(message)
     } finally {
       setLoading(false)
+      console.log('🏁 LoginFormDB: handleSubmit finished')
     }
   }
 
