@@ -69,7 +69,7 @@ RUN pip install tensorrt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install openmim
+RUN pip install -U openmim
 RUN mim install mmcv==2.1.0
 RUN mim install mmengine==0.10.7
 RUN mim install mmdet==3.3.0
