@@ -52,12 +52,17 @@ RUN git clone https://github.com/open-mmlab/mmcv.git && \
     pip install -r requirements/optional.txt && \
     export MMCV_WITH_OPS=1 && \
     export FORCE_CUDA=1 && \
-    pip install -e . --no-build-isolation -v && \
+    pip install . --no-build-isolation -v && \
     cd ..
 
-# Install mmdet
-RUN pip install mmdet==3.3.0
 
+
+# Install mmdet
+RUN git clone https://github.com/open-mmlab/mmdetection.git && \
+    cd mmdetection && \
+    export FORCE_CUDA=1 && \
+    pip install . --no-build-isolation -v  && \
+    cd ..
 # 7. 애플리케이션 코드 복사
 COPY app ./app
 
