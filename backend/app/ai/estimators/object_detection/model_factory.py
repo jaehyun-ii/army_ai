@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 def _register_custom_mmdet_modules():
     """Register custom MMDetection modules (EfficientDetIncre, etc.)."""
     try:
+        # Import MMDetection registry first
+        from mmdet.registry import MODELS
+
+        # Check if already registered
+        if 'EfficientDetIncre' in MODELS.module_dict:
+            logger.info("EfficientDetIncre already registered")
+            return True
+
         # First, try to import standard EfficientDet project modules from mmdetection
         try:
             import sys
@@ -52,10 +60,20 @@ def _register_custom_mmdet_modules():
             EfficientDetIncre,
             EfficientDetSepBNHeadIncre
         )
-        logger.info("Custom EfficientDet modules registered successfully")
-        return True
+
+        # Verify registration succeeded
+        if 'EfficientDetIncre' in MODELS.module_dict:
+            logger.info(f"✓ EfficientDetIncre registered successfully in MODELS registry")
+            return True
+        else:
+            logger.error(f"✗ EfficientDetIncre import succeeded but not found in registry")
+            logger.error(f"Available custom models: {[k for k in MODELS.module_dict.keys() if 'Efficient' in k]}")
+            return False
+
     except Exception as e:
-        logger.debug(f"Could not register custom modules: {e}")
+        logger.error(f"Failed to register custom modules: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 
@@ -393,21 +411,28 @@ class ModelFactory:
                     model_type = cfg.model.get('type', '')
                     logger.info(f"Model type from config: {model_type}")
 
-                    # Log all available model types in registry
-                    available_models = list(MODELS.module_dict.keys())
-                    logger.info(f"Available models in registry (first 20): {available_models[:20]}")
-                    logger.info(f"Is '{model_type}' in registry: {model_type in MODELS.module_dict}")
-
                     # Check if model type exists in registry
                     if model_type not in MODELS.module_dict:
-                        logger.warning(
-                            f"Model type '{model_type}' not found in MMDetection registry. "
-                            f"This may be a custom model. Available detector types include: "
-                            f"SingleStageDetector, TwoStageDetector, CascadeRCNN, etc."
-                        )
-                        # Don't try to replace with non-existent 'EfficientDet'
-                        # Let it fail gracefully and fall back to wrapper
-                        raise ValueError(f"Model type '{model_type}' not in registry")
+                        # Log all available model types in registry
+                        available_models = list(MODELS.module_dict.keys())
+                        efficient_models = [k for k in available_models if 'Efficient' in k]
+                        logger.error(f"✗ Model type '{model_type}' NOT found in MMDetection registry")
+                        logger.error(f"Available EfficientDet models: {efficient_models}")
+                        logger.error(f"Total registered models: {len(available_models)}")
+
+                        # If custom module registration failed, provide clear error
+                        if not custom_registered:
+                            raise ImportError(
+                                f"Model type '{model_type}' requires custom module registration, "
+                                f"but registration failed. Check logs for details."
+                            )
+                        else:
+                            raise ValueError(
+                                f"Model type '{model_type}' not found in registry even after "
+                                f"successful custom module import. This indicates a registration issue."
+                            )
+
+                    logger.info(f"✓ Model type '{model_type}' found in registry")
 
                     model = MODELS.build(cfg.model)
                     logger.info("Model built successfully from MMDetection config")
@@ -422,61 +447,27 @@ class ModelFactory:
                     logger.info("Checkpoint weights loaded successfully")
                     # Weights are already loaded, no need for additional load_checkpoint call
 
+                except (ImportError, ValueError) as e:
+                    # These are registration/import errors - re-raise with clear message
+                    logger.error(f"Fatal: Model registration or import failed: {e}")
+                    raise ImportError(
+                        f"Failed to load EfficientDet model '{model_type}': {str(e)}\n\n"
+                        "This is likely due to:\n"
+                        "  1. Custom model class not properly registered with MMDetection\n"
+                        "  2. Missing dependencies or import errors\n"
+                        "  3. Incompatible MMDetection version\n\n"
+                        "Check the logs above for detailed error information."
+                    ) from e
                 except Exception as e:
-                    logger.warning(f"Could not build model from config: {e}")
-                    logger.warning(
-                        "If this is a custom model (e.g., 'EfficientDetIncre'), you need to:\n"
-                        "  1. Implement the custom model class\n"
-                        "  2. Register it with MMDetection's MODELS registry\n"
-                        "  3. Import the custom module before loading the model\n"
-                        "Falling back to basic wrapper (limited functionality)"
-                    )
-                    mmdet_available = False
-
-            if not mmdet_available:
-                # Fallback: load checkpoint directly
-                logger.info("Using fallback model loading (mmdet not fully available)")
-                # PyTorch 2.6+ requires weights_only=False for MMEngine checkpoints
-                if not checkpoint_loaded:
-                    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-
-                if 'state_dict' in checkpoint:
-                    state_dict = checkpoint['state_dict']
-                else:
-                    state_dict = checkpoint
-
-                # Create a simple wrapper for the checkpoint
-                from torch import nn
-                class EfficientDetWrapper(nn.Module):
-                    def __init__(self, state_dict):
-                        super().__init__()
-                        self.state_dict_orig = state_dict
-                        # Load state dict into module
-                        try:
-                            self.load_state_dict(state_dict, strict=False)
-                        except:
-                            pass
-
-                    def forward(self, x, data_samples=None, mode='predict'):
-                        """
-                        Forward pass compatible with MMDetection API.
-
-                        This is a fallback implementation that provides a better error message.
-                        For full functionality, ensure MMDetection is properly installed.
-                        """
-                        raise NotImplementedError(
-                            "EfficientDet model requires custom implementation. "
-                            "The model checkpoint expects a custom 'EfficientDetIncre' class "
-                            "that is not part of standard MMDetection. "
-                            "Please ensure:\n"
-                            "  1. MMDetection is properly installed (pip install mmdet mmcv)\n"
-                            "  2. Custom model classes are registered with MMDetection\n"
-                            "  3. Required modules are imported before model loading\n"
-                            "Current mode: " + mode
-                        )
-
-                model = EfficientDetWrapper(state_dict)
-                logger.info("Created EfficientDetWrapper")
+                    # Other errors during model building
+                    logger.error(f"Error building model from config: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    raise RuntimeError(
+                        f"Failed to build EfficientDet model from config: {str(e)}\n\n"
+                        "The model config was loaded successfully, but building the model failed.\n"
+                        "Check the logs above for detailed error information."
+                    ) from e
 
             # Extract model configuration
             input_size = config.get('input_size', [768, 768])
