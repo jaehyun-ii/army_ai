@@ -26,12 +26,13 @@ export function DashboardLayout({
   onToggleMenu,
   children
 }: DashboardLayoutProps) {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
   const isAdmin = user?.role === 'admin'
 
   console.log('Dashboard Layout - User:', user)
   console.log('Dashboard Layout - User Role:', user?.role)
   console.log('Dashboard Layout - Is Admin:', isAdmin)
+  console.log('Dashboard Layout - Loading:', loading)
 
   return (
     <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden">
@@ -39,7 +40,19 @@ export function DashboardLayout({
 
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 flex overflow-hidden">
-          {isAdmin ? (
+          {loading ? (
+            // Loading skeleton for sidebar
+            <aside className="w-72 bg-gradient-to-b from-slate-900/95 via-slate-800/95 to-slate-900/95 backdrop-blur-sm border-r border-white/10 flex flex-col">
+              <div className="flex-1 overflow-y-auto p-3">
+                <div className="space-y-1">
+                  <div className="h-4 bg-slate-700/50 rounded w-24 mb-3 animate-pulse" />
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="h-10 bg-slate-700/30 rounded animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            </aside>
+          ) : isAdmin ? (
             <AdminSidebar
               menuItems={menuItems as AdminMenuItem[]}
               activeSection={activeSection}

@@ -59,6 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (username: string, password: string) => {
     console.log('🔐 Login attempt started for:', username)
+    setLoading(true)
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -89,11 +90,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const message = error instanceof Error ? error.message : 'Login failed'
       console.error('❌ Login error:', error)
       throw new Error(message)
+    } finally {
+      setLoading(false)
     }
   }
 
   const logout = async () => {
     const token = localStorage.getItem('token')
+    setLoading(true)
 
     try {
       await fetch('/api/auth/logout', {
