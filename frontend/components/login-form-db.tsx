@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Shield, Lock, User, Eye, EyeOff, Cpu, Zap, AlertCircle } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Shield, Lock, User, Eye, EyeOff, Cpu, Zap, AlertCircle, ShieldAlert, Clock } from "lucide-react"
 import { useAuth } from '@/contexts/AuthContext'
 
 export function LoginFormDB() {
@@ -20,6 +20,7 @@ export function LoginFormDB() {
     password: "",
   })
   const [error, setError] = useState("")
+  const [errorType, setErrorType] = useState<'error' | 'warning' | 'locked'>('error')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   const { login } = useAuth()
@@ -41,6 +42,16 @@ export function LoginFormDB() {
     } catch (error) {
       console.error('❌ LoginFormDB: Login error:', error)
       const message = error instanceof Error ? error.message : '로그인 중 오류가 발생했습니다.'
+
+      // Categorize error type based on message content
+      if (message.includes('잠겨있습니다') || message.includes('잠겼습니다')) {
+        setErrorType('locked')
+      } else if (message.includes('남은 시도') || message.includes('세션이 종료')) {
+        setErrorType('warning')
+      } else {
+        setErrorType('error')
+      }
+
       setError(message)
     } finally {
       setLoading(false)
@@ -119,11 +130,48 @@ export function LoginFormDB() {
           </div>
 
           {error && (
-            <Alert className="bg-red-900/20 border-red-500/30">
-              <AlertCircle className="h-4 w-4 text-red-400" />
-              <AlertDescription className="text-red-300">
+            <Alert className={
+              errorType === 'locked'
+                ? 'bg-red-900/30 border-red-500/50'
+                : errorType === 'warning'
+                ? 'bg-yellow-900/30 border-yellow-500/50'
+                : 'bg-red-900/20 border-red-500/30'
+            }>
+              {errorType === 'locked' ? (
+                <ShieldAlert className="h-5 w-5 text-red-400" />
+              ) : errorType === 'warning' ? (
+                <Clock className="h-5 w-5 text-yellow-400" />
+              ) : (
+                <AlertCircle className="h-4 w-4 text-red-400" />
+              )}
+              <AlertTitle className={
+                errorType === 'locked'
+                  ? 'text-red-300 font-semibold'
+                  : errorType === 'warning'
+                  ? 'text-yellow-300 font-semibold'
+                  : 'text-red-300'
+              }>
+                {errorType === 'locked'
+                  ? '계정 잠금'
+                  : errorType === 'warning'
+                  ? '로그인 실패'
+                  : '오류'}
+              </AlertTitle>
+              <AlertDescription className={
+                errorType === 'locked'
+                  ? 'text-red-200'
+                  : errorType === 'warning'
+                  ? 'text-yellow-200'
+                  : 'text-red-300'
+              }>
                 {error}
               </AlertDescription>
+              {errorType === 'locked' && (
+                <AlertDescription className="text-red-200 mt-2 text-sm">
+                  보안을 위해 로그인 시도가 5회 초과되어 계정이 잠겼습니다.
+                  잠금 시간이 만료된 후 다시 시도해주세요.
+                </AlertDescription>
+              )}
             </Alert>
           )}
 

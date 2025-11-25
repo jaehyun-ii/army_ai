@@ -32,9 +32,12 @@ import {
   AlertCircle,
   CheckCircle2,
   Download,
-  RefreshCw
+  RefreshCw,
+  Check,
+  X
 } from "lucide-react"
 import { useAuth } from '@/contexts/AuthContext'
+import { validatePassword } from '@/lib/password-validator'
 
 interface User {
   id: string
@@ -73,6 +76,8 @@ export function AccountManagementDB() {
     confirmPassword: '',
     role: 'user'
   })
+  const [passwordErrors, setPasswordErrors] = useState<string[]>([])
+  const [showPasswordHelp, setShowPasswordHelp] = useState(false)
 
   // 사용자 목록 가져오기
   const fetchUsers = useCallback(async () => {
@@ -132,6 +137,13 @@ export function AccountManagementDB() {
     return matchesSearch && matchesRole && matchesStatus
   })
 
+  // 비밀번호 변경 시 유효성 검사
+  const handlePasswordChange = (password: string) => {
+    setNewUser({...newUser, password})
+    const validation = validatePassword(password, newUser.username)
+    setPasswordErrors(validation.errors)
+  }
+
   // 사용자 생성
   const handleCreateUser = async () => {
     if (!newUser.username || !newUser.password) {
@@ -141,6 +153,13 @@ export function AccountManagementDB() {
 
     if (newUser.password !== newUser.confirmPassword) {
       alert('비밀번호가 일치하지 않습니다.')
+      return
+    }
+
+    // Client-side password validation
+    const validation = validatePassword(newUser.password, newUser.username)
+    if (!validation.isValid) {
+      alert(`비밀번호 정책 위반:\n${validation.errors.join('\n')}`)
       return
     }
 
@@ -168,8 +187,10 @@ export function AccountManagementDB() {
           confirmPassword: '',
           role: 'user'
         })
+        setPasswordErrors([])
         setShowCreateDialog(false)
         await fetchUsers()
+        alert('사용자 계정이 성공적으로 생성되었습니다.')
       } else {
         alert(result.detail || '계정 생성에 실패했습니다.')
       }
@@ -435,27 +456,69 @@ export function AccountManagementDB() {
                           placeholder="example@army.mil.kr"
                         />
                       </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <Label className="text-white">비밀번호 *</Label>
-                          <Input
-                            type="password"
-                            value={newUser.password}
-                            onChange={(e) => setNewUser({...newUser, password: e.target.value})}
-                            className="bg-slate-700/50 border-white/10 text-white"
-                            placeholder="8자 이상"
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-white">비밀번호 확인 *</Label>
-                          <Input
-                            type="password"
-                            value={newUser.confirmPassword}
-                            onChange={(e) => setNewUser({...newUser, confirmPassword: e.target.value})}
-                            className="bg-slate-700/50 border-white/10 text-white"
-                            placeholder="비밀번호 재입력"
-                          />
-                        </div>
+                      <div>
+                        <Label className="text-white">비밀번호 *</Label>
+                        <Input
+                          type="password"
+                          value={newUser.password}
+                          onChange={(e) => handlePasswordChange(e.target.value)}
+                          onFocus={() => setShowPasswordHelp(true)}
+                          className="bg-slate-700/50 border-white/10 text-white"
+                          placeholder="9자 이상, 숫자+문자+특수문자"
+                        />
+                        {showPasswordHelp && (
+                          <div className="mt-2 p-3 bg-slate-700/30 rounded-md border border-white/10">
+                            <p className="text-xs text-slate-300 font-semibold mb-2">비밀번호 정책:</p>
+                            <ul className="space-y-1 text-xs">
+                              <li className={`flex items-center gap-2 ${newUser.password.length >= 9 && /\d/.test(newUser.password) && /[a-zA-Z]/.test(newUser.password) && /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/~`]/.test(newUser.password) ? 'text-green-400' : 'text-slate-400'}`}>
+                                {newUser.password.length >= 9 && /\d/.test(newUser.password) && /[a-zA-Z]/.test(newUser.password) && /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/~`]/.test(newUser.password) ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                                숫자, 문자, 특수문자 포함 9자리 이상
+                              </li>
+                              <li className={`flex items-center gap-2 ${passwordErrors.some(e => e.includes('ID')) ? 'text-red-400' : 'text-slate-400'}`}>
+                                {passwordErrors.some(e => e.includes('ID')) ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                                사용자 ID와 다르게 설정
+                              </li>
+                              <li className={`flex items-center gap-2 ${passwordErrors.some(e => e.includes('연속')) ? 'text-red-400' : 'text-slate-400'}`}>
+                                {passwordErrors.some(e => e.includes('연속')) ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                                동일 문자 3회 이상 반복 금지
+                              </li>
+                              <li className={`flex items-center gap-2 ${passwordErrors.some(e => e.includes('오름') || e.includes('내림')) ? 'text-red-400' : 'text-slate-400'}`}>
+                                {passwordErrors.some(e => e.includes('오름') || e.includes('내림')) ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                                연속 오름차순/내림차순 금지
+                              </li>
+                            </ul>
+                            {passwordErrors.length > 0 && (
+                              <Alert className="mt-2 bg-red-900/20 border-red-500/30">
+                                <AlertCircle className="h-4 w-4 text-red-400" />
+                                <AlertDescription className="text-red-300 text-xs">
+                                  {passwordErrors[0]}
+                                </AlertDescription>
+                              </Alert>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <Label className="text-white">비밀번호 확인 *</Label>
+                        <Input
+                          type="password"
+                          value={newUser.confirmPassword}
+                          onChange={(e) => setNewUser({...newUser, confirmPassword: e.target.value})}
+                          className="bg-slate-700/50 border-white/10 text-white"
+                          placeholder="비밀번호 재입력"
+                        />
+                        {newUser.password && newUser.confirmPassword && newUser.password !== newUser.confirmPassword && (
+                          <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                            <X className="w-3 h-3" />
+                            비밀번호가 일치하지 않습니다
+                          </p>
+                        )}
+                        {newUser.password && newUser.confirmPassword && newUser.password === newUser.confirmPassword && (
+                          <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
+                            <Check className="w-3 h-3" />
+                            비밀번호가 일치합니다
+                          </p>
+                        )}
                       </div>
                       <div>
                         <Label className="text-white">권한</Label>

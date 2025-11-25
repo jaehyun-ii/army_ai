@@ -1,7 +1,7 @@
 """
 User model.
 """
-from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -28,6 +28,12 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole, name="user_role_enum", values_callable=lambda x: [e.value for e in x]), nullable=False, default=UserRole.USER.value)
     is_active = Column(Boolean, nullable=False, default=True)
+
+    # Security fields
+    failed_login_attempts = Column(Integer, nullable=False, default=0)  # Track failed login attempts
+    locked_until = Column(DateTime(timezone=True), nullable=True)  # Account lock timestamp
+    current_session_id = Column(String(255), nullable=True)  # Current active session (for single login)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)  # Last successful login
 
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

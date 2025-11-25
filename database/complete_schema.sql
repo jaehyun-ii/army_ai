@@ -118,6 +118,12 @@ CREATE TABLE users (
   password_hash varchar(255) NOT NULL,
   role user_role_enum NOT NULL DEFAULT 'user',
   is_active boolean NOT NULL DEFAULT true,
+  -- Security fields for login attempt tracking and session management
+  failed_login_attempts integer NOT NULL DEFAULT 0,
+  locked_until timestamptz,
+  current_session_id varchar(255),
+  last_login_at timestamptz,
+  -- Timestamps
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz
@@ -130,6 +136,16 @@ WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX uq_users_email_active
 ON users (lower(email))
 WHERE deleted_at IS NULL AND email IS NOT NULL;
+
+-- Index for session lookups (single login enforcement)
+CREATE INDEX idx_users_current_session_id
+ON users(current_session_id)
+WHERE current_session_id IS NOT NULL;
+
+-- Index for locked accounts (performance optimization)
+CREATE INDEX idx_users_locked_until
+ON users(locked_until)
+WHERE locked_until IS NOT NULL;
 
 CREATE TABLE experiments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

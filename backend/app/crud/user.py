@@ -11,6 +11,7 @@ import datetime
 
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate
+from app.core.password_validator import validate_password
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -52,7 +53,20 @@ async def get_user_by_id(db: AsyncSession, user_id: UUID) -> Optional[User]:
 
 
 async def create_user(db: AsyncSession, user_create: UserCreate) -> User:
-    """Create a new user (using username as primary identifier)."""
+    """
+    Create a new user (using username as primary identifier).
+
+    Validates password against security policy before creation.
+    """
+    # Validate password against security policy
+    is_valid, errors = validate_password(user_create.password, user_create.username)
+    if not is_valid:
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"비밀번호 정책 위반: {', '.join(errors)}"
+        )
+
     hashed_password = get_password_hash(user_create.password)
 
     db_user = User(
@@ -60,6 +74,7 @@ async def create_user(db: AsyncSession, user_create: UserCreate) -> User:
         email=user_create.email,  # DB: nullable
         password_hash=hashed_password,
         role=user_create.role,
+        failed_login_attempts=0,
     )
 
     db.add(db_user)
@@ -122,3 +137,56 @@ async def delete_user(db: AsyncSession, user_id: UUID) -> Optional[User]:
         await db.refresh(user)
 
     return user
+
+
+async def increment_failed_login(db: AsyncSession, user: User) -> None:
+    """Increment failed login attempts and lock account if threshold exceeded."""
+    user.failed_login_attempts += 1
+
+    # Lock account for 30 minutes after 5 failed attempts
+    if user.failed_login_attempts >= 5:
+        user.locked_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
+        user.is_active = False
+
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+
+async def reset_failed_login(db: AsyncSession, user: User) -> None:
+    """Reset failed login attempts after successful login."""
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.last_login_at = datetime.datetime.utcnow()
+
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+
+async def is_account_locked(user: User) -> bool:
+    """Check if account is currently locked."""
+    if user.locked_until is None:
+        return False
+
+    # Check if lock period has expired
+    if datetime.datetime.utcnow() > user.locked_until:
+        return False
+
+    return True
+
+
+async def set_session_id(db: AsyncSession, user: User, session_id: str) -> None:
+    """Set current session ID for single login enforcement."""
+    user.current_session_id = session_id
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+
+async def clear_session_id(db: AsyncSession, user: User) -> None:
+    """Clear current session ID on logout."""
+    user.current_session_id = None
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
