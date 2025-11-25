@@ -63,6 +63,8 @@ RUN git clone https://github.com/open-mmlab/mmdetection.git && \
     export FORCE_CUDA=1 && \
     pip install . --no-build-isolation -v  && \
     cd ..
+
+
 # 7. 애플리케이션 코드 복사
 COPY app ./app
 
