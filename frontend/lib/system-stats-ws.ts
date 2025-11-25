@@ -81,8 +81,8 @@ export class SystemStatsSSE {
     private onError?: ErrorCallback,
     private onClose?: CloseCallback
   ) {
-    const backendUrl = getBackendUrl()
-    this.url = `${backendUrl}/api/v1/system/stats/stream?interval=${interval}`
+    // Use Next.js API proxy route for SSE
+    this.url = `/api/system-stats/stream?interval=${interval}`
   }
 
   connect(): void {
@@ -191,8 +191,8 @@ export function useSystemStatsSSE(
  * Fetch system stats via HTTP (one-time request)
  */
 export async function fetchSystemStats(): Promise<SystemStats> {
-  const backendUrl = getBackendUrl()
-  const response = await fetch(`${backendUrl}/api/v1/system/stats`)
+  // Use Next.js API proxy route
+  const response = await fetch(`/api/system-stats`)
 
   if (!response.ok) {
     throw new Error(`Failed to fetch system stats: ${response.statusText}`)

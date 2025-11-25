@@ -310,9 +310,9 @@ export function UnifiedEvaluationDashboard() {
         const sessionId = `eval-${run.id}-${Date.now()}`
 
         try {
-          // Setup SSE connection for real-time logs
+          // Setup SSE connection for real-time logs via Next.js API proxy
           const eventSource = new EventSource(
-            `${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/events/${sessionId}`
+            `/api/evaluation/runs/events/${sessionId}`
           )
 
           eventSources.push(eventSource)
