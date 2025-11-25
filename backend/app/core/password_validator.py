@@ -18,17 +18,10 @@ class PasswordValidator:
 
     # Common Korean dictionary words (can be extended)
     COMMON_WORDS = {
-        'password', 'admin', 'user', 'test', 'qwerty',
-        '비밀번호', '관리자', '사용자', '테스트',
-        'army', 'military', 'soldier', 'korea',
-        '육군', '군대', '병사', '한국', '대한민국'
     }
 
     # Personal/department related keywords to block
     BLOCKED_KEYWORDS = {
-        '생년월일', '전화번호', '주민번호', 'birthday', 'phone',
-        '부대', '사단', '여단', '연대', '대대', '중대', '소대', 'division', 'brigade',
-        '이름', 'name', '성명'
     }
 
     @staticmethod
