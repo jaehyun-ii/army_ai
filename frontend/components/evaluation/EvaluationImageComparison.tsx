@@ -84,10 +84,10 @@ export function EvaluationImageComparison({
       // viewMode에 따라 dataset_type 파라미터와 page_size 조정
       // all 모드일 때는 base와 attack을 모두 가져와야 하므로 각각 별도로 요청
       if (viewMode === "all") {
-        // All 모드: base와 attack을 각각 요청
+        // All 모드: base와 attack을 각각 요청 (프록시 API 사용)
         const [baseResponse, attackResponse] = await Promise.all([
-          fetch(`${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/${runId}/images-with-predictions?dataset_type=base`),
-          fetch(`${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/${runId}/images-with-predictions?dataset_type=attack`)
+          fetch(`/api/evaluations/${runId}/images-with-predictions?dataset_type=base`),
+          fetch(`/api/evaluations/${runId}/images-with-predictions?dataset_type=attack`)
         ])
 
         if (!baseResponse.ok || !attackResponse.ok) {
@@ -132,8 +132,8 @@ export function EvaluationImageComparison({
         return
       }
 
-      // Base 또는 Attack 모드: 단일 요청
-      let url = `${process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'}/api/v1/evaluation/runs/${runId}/images-with-predictions`
+      // Base 또는 Attack 모드: 단일 요청 (프록시 API 사용)
+      let url = `/api/evaluations/${runId}/images-with-predictions`
 
       if (viewMode === "base") {
         url += "?dataset_type=base"
@@ -192,13 +192,28 @@ export function EvaluationImageComparison({
 
   const getImageUrl = (storageKey: string) => {
     if (!storageKey) return ""
-    const baseUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
-    return `${baseUrl}/storage/${storageKey}`
+    // Use Next.js API proxy route
+    return `/api/storage/${storageKey}`
   }
 
   const getVisualizationUrl = (visualizationPath: string) => {
-    const baseUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
-    return `${baseUrl}${visualizationPath}`
+    if (!visualizationPath) return ""
+
+    // visualization_url은 보통 /storage/... 또는 /api/v1/storage/... 형식
+    // storage 경로를 추출하여 프록시 API 사용
+    let storagePath = visualizationPath
+
+    // /api/v1/storage/ prefix 제거
+    if (storagePath.startsWith('/api/v1/storage/')) {
+      storagePath = storagePath.replace('/api/v1/storage/', '')
+    }
+    // /storage/ prefix 제거
+    else if (storagePath.startsWith('/storage/')) {
+      storagePath = storagePath.replace('/storage/', '')
+    }
+
+    // Next.js API proxy 사용
+    return `/api/storage/${storagePath}`
   }
 
   if (loading) {

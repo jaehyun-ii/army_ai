@@ -627,8 +627,6 @@ export function DataManagementDB() {
         setUploadProgress((prev) => Math.min(prev + 5, 90))
       }, 200)
 
-      const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
-
       // Create FormData with actual files
       const formData = new FormData()
       formData.append("name", uploadForm.name)
@@ -647,7 +645,8 @@ export function DataManagementDB() {
       // Add classes file (required)
       formData.append("classes_file", uploadForm.classesFileObject!)
 
-      const response = await fetch(`${BACKEND_API_URL}/api/v1/dataset-service/upload-yolo-files`, {
+      // Use Next.js API proxy instead of direct backend access
+      const response = await fetch(`/api/datasets/upload-yolo`, {
         method: "POST",
         body: formData,
       })

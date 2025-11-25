@@ -201,7 +201,7 @@ export async function startTraining(config: TrainingConfig): Promise<TrainingRes
       session_id: sessionId,  // Return the same session ID
       status: 'completed',
       message: data.message || 'Patch generation started',
-      sse_url: `${BACKEND_API_URL}${API_V1}/patches/sse/${sessionId}`  // Fixed: correct SSE endpoint
+      sse_url: `/api/patches/sse/${sessionId}`  // Use Next.js proxy route
     }
   } catch (error) {
     console.error('Failed to start training:', error)
@@ -264,9 +264,9 @@ export function connectPatchGenerationSSE(sessionId: string, callbacks: {
   onClose?: () => void
 }): EventSource | null {
   try {
-    // Updated endpoint to match backend
-    const sseUrl = `${BACKEND_API_URL}${API_V1}/patches/sse/${sessionId}`
-    console.log('[SSE] Connecting to patch generation:', sseUrl)
+    // Use Next.js API proxy route for SSE
+    const sseUrl = `/api/patches/sse/${sessionId}`
+    console.log('[SSE] Connecting to patch generation via proxy:', sseUrl)
     console.log('[SSE] Session ID:', sessionId)
 
     // Use the session ID directly - no need to transform it
@@ -403,10 +403,10 @@ export function connectAdversarialDataSSE(
   }
 ): EventSource | null {
   try {
-    // Updated SSE endpoints to match backend - both use /attack-datasets/sse
-    const sseUrl = `${BACKEND_API_URL}${API_V1}/attack-datasets/sse/${sessionId}`
+    // Use Next.js API proxy route for SSE
+    const sseUrl = `/api/attack-datasets/sse/${sessionId}`
 
-    console.log(`[SSE] Connecting to ${attackType} attack dataset:`, sseUrl)
+    console.log(`[SSE] Connecting to ${attackType} attack dataset via proxy:`, sseUrl)
 
     const eventSource = new EventSource(sseUrl)
 
@@ -694,6 +694,7 @@ export function getPatchImageUrl(patchId: string): string {
 
 /**
  * Get URL for dataset image by storage key
+ * Uses Next.js API proxy route for better CORS handling and internal network access
  */
 export function getImageUrlByStorageKey(storageKey: string): string {
   if (!storageKey) {
@@ -706,7 +707,8 @@ export function getImageUrlByStorageKey(storageKey: string): string {
     ? storageKey.substring('storage/'.length)
     : storageKey
 
-  const url = `${BACKEND_API_URL}${API_V1}/storage/${cleanedKey}`
+  // Use Next.js API proxy route instead of direct backend access
+  const url = `/api/storage/${cleanedKey}`
   console.log('[getImageUrlByStorageKey] Generated URL:', url, 'for key:', storageKey)
   return url
 }

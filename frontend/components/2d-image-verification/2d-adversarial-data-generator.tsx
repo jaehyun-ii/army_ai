@@ -403,9 +403,9 @@ export function AdversarialDataGeneratorUpdated() {
             ? Number(bestScoreRaw)
             : NaN
 
-        // Use storage_key to generate preview URL via storage endpoint
+        // Use storage_key to generate preview URL via Next.js API proxy
         const previewUrl = patch.storage_key
-          ? `${API_V1_BASE}/storage/${patch.storage_key}`
+          ? `/api/storage/${patch.storage_key}`
           : undefined
 
         const createdAtIso = patch.created_at ? new Date(patch.created_at).toISOString() : new Date().toISOString()

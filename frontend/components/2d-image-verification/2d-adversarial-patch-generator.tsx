@@ -865,7 +865,7 @@ export function AdversarialPatchGeneratorUpdated() {
             <div className="text-sm text-slate-400 mb-2">생성된 패치 이미지</div>
             <div className="w-full aspect-square bg-slate-800 rounded-lg overflow-hidden border-2 border-slate-700 shadow-xl">
               <img
-                src={`${BACKEND_API_URL}/api/v1/storage/${(generatedPatches[0] as any).storageKey}`}
+                src={`/api/storage/${(generatedPatches[0] as any).storageKey}`}
                 alt="Generated adversarial patch"
                 className="w-full h-full object-contain"
                 onError={(e) => {
