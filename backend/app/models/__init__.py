@@ -14,6 +14,7 @@ from app.models.model_repo import (
     # ODModelDeployment,  # Disabled - table not in use
 )
 from app.models.audit import AuditLog
+from app.models.system_log import SystemLog, LogLevel
 from app.models.evaluation import (
     EvalRun,
     EvalItem,
@@ -39,6 +40,8 @@ __all__ = [
     # "ODModelClass",  # Removed - use od_models.labelmap instead
     # "ODModelDeployment",  # Disabled - table not in use
     "AuditLog",
+    "SystemLog",
+    "LogLevel",
     "EvalRun",
     "EvalItem",
     # "EvalClassMetrics",  # Removed - table not in use

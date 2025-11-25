@@ -27,7 +27,7 @@ export function SystemStatusBar() {
   // Connect to SSE
   const connectSSE = () => {
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
       const eventSource = new EventSource(`${backendUrl}/api/v1/system/stats/stream?interval=1.0`)
 
       eventSource.onopen = () => {

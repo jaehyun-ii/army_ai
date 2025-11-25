@@ -69,6 +69,12 @@ END IF;
 END$$;
 
 DO $$BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'log_level_enum') THEN
+  CREATE TYPE log_level_enum AS ENUM ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL');
+END IF;
+END$$;
+
+DO $$BEGIN
 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'experiment_status_enum') THEN
   CREATE TYPE experiment_status_enum AS ENUM ('draft','running','completed','failed','archived');
 END IF;
@@ -346,6 +352,46 @@ CREATE TABLE audit_logs (
   CONSTRAINT chk_audit_action CHECK (char_length(action) > 0),
   CONSTRAINT chk_audit_target_type CHECK (target_type IS NULL OR char_length(target_type) > 0)
 );
+
+CREATE TABLE system_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  log_level log_level_enum NOT NULL DEFAULT 'INFO',
+  timestamp timestamptz NOT NULL DEFAULT now(),
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  username varchar(100),
+  ip_address inet,
+  user_agent text,
+  action varchar(200) NOT NULL,
+  module varchar(100),
+  message text NOT NULL,
+  details jsonb,
+  request_id varchar(100),
+  endpoint varchar(500),
+  method varchar(10),
+  status_code integer,
+  response_time_ms integer,
+  error_type varchar(200),
+  error_message text,
+  stack_trace text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_system_logs_action CHECK (char_length(action) > 0),
+  CONSTRAINT chk_system_logs_message CHECK (char_length(message) > 0),
+  CONSTRAINT chk_system_logs_details CHECK (details IS NULL OR jsonb_typeof(details) = 'object'),
+  CONSTRAINT chk_system_logs_response_time CHECK (response_time_ms IS NULL OR response_time_ms >= 0)
+);
+
+CREATE INDEX idx_system_logs_timestamp ON system_logs(timestamp DESC);
+CREATE INDEX idx_system_logs_level ON system_logs(log_level);
+CREATE INDEX idx_system_logs_user ON system_logs(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_system_logs_action ON system_logs(action);
+CREATE INDEX idx_system_logs_module ON system_logs(module) WHERE module IS NOT NULL;
+CREATE INDEX idx_system_logs_request_id ON system_logs(request_id) WHERE request_id IS NOT NULL;
+CREATE INDEX idx_system_logs_level_timestamp ON system_logs(log_level, timestamp DESC);
+CREATE INDEX idx_system_logs_ip ON system_logs(ip_address) WHERE ip_address IS NOT NULL;
+CREATE INDEX idx_system_logs_message_gin ON system_logs USING gin(to_tsvector('english', message));
+CREATE INDEX idx_system_logs_details_gin ON system_logs USING gin(details) WHERE details IS NOT NULL;
+CREATE INDEX idx_system_logs_user_timestamp ON system_logs(user_id, timestamp DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_system_logs_level_module_timestamp ON system_logs(log_level, module, timestamp DESC);
 
 CREATE TABLE eval_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

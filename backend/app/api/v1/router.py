@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     experiments,
     tags,  # PHASE 2 NEW
     system_stats,
+    system_logs,
     users,
     estimators,
     attack_datasets,
@@ -62,4 +63,5 @@ api_router.include_router(patches.router, prefix="/patches", tags=["Patches"])
 
 # System Monitoring
 api_router.include_router(system_stats.router, prefix="/system", tags=["System Statistics"])
+api_router.include_router(system_logs.router, prefix="/system-logs", tags=["System Logs"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
