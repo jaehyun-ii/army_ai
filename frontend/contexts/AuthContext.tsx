@@ -7,11 +7,10 @@ interface User {
   id: string
   username: string
   email: string
-  name: string
-  rank?: string
-  unit?: string
   role: string
-  lastLoginAt?: string | null
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 interface AuthContextType {

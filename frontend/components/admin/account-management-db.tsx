@@ -39,13 +39,9 @@ import { useAuth } from '@/contexts/AuthContext'
 interface User {
   id: string
   username: string
-  name: string
   email: string
-  rank?: string
-  unit?: string
   role: string
   isActive: boolean
-  lastLoginAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -72,13 +68,10 @@ export function AccountManagementDB() {
   // 새 사용자 생성 폼 상태
   const [newUser, setNewUser] = useState({
     username: '',
-    name: '',
     email: '',
     password: '',
     confirmPassword: '',
-    rank: '',
-    unit: '',
-    role: 'USER'
+    role: 'user'
   })
 
   // 사용자 목록 가져오기
@@ -93,7 +86,17 @@ export function AccountManagementDB() {
       })
       if (response.ok) {
         const data = await response.json()
-        setUsers(data)
+        // Transform backend response to match frontend interface (camelCase)
+        const transformedUsers = data.map((user: any) => ({
+          id: user.id,
+          username: user.username,
+          email: user.email || '',
+          role: user.role,
+          isActive: user.is_active,
+          createdAt: user.created_at,
+          updatedAt: user.updated_at
+        }))
+        setUsers(transformedUsers)
       }
     } catch (error) {
       console.error('Error fetching users:', error)
@@ -121,10 +124,9 @@ export function AccountManagementDB() {
   const filteredUsers = users.filter(user => {
     const matchesSearch =
       user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase())
+      (user.email && user.email.toLowerCase().includes(searchTerm.toLowerCase()))
 
-    const matchesRole = roleFilter === 'all' || user.role === roleFilter
+    const matchesRole = roleFilter === 'all' || user.role.toLowerCase() === roleFilter.toLowerCase()
     const matchesStatus = statusFilter === 'all' || (statusFilter === 'active' ? user.isActive : !user.isActive)
 
     return matchesSearch && matchesRole && matchesStatus
@@ -132,8 +134,8 @@ export function AccountManagementDB() {
 
   // 사용자 생성
   const handleCreateUser = async () => {
-    if (!newUser.username || !newUser.name || !newUser.email || !newUser.password) {
-      alert('모든 필수 필드를 입력해주세요.')
+    if (!newUser.username || !newUser.password) {
+      alert('사용자 ID와 비밀번호는 필수 항목입니다.')
       return
     }
 
@@ -150,11 +152,8 @@ export function AccountManagementDB() {
         },
         body: JSON.stringify({
           username: newUser.username,
-          name: newUser.name,
-          email: newUser.email,
+          email: newUser.email || undefined, // Email is optional
           password: newUser.password,
-          rank: newUser.rank,
-          unit: newUser.unit,
           role: newUser.role
         })
       })
@@ -164,13 +163,10 @@ export function AccountManagementDB() {
       if (response.ok) {
         setNewUser({
           username: '',
-          name: '',
           email: '',
           password: '',
           confirmPassword: '',
-          rank: '',
-          unit: '',
-          role: 'USER'
+          role: 'user'
         })
         setShowCreateDialog(false)
         await fetchUsers()
@@ -370,7 +366,7 @@ export function AccountManagementDB() {
                 <div className="relative">
                   <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                   <Input
-                    placeholder="사용자 ID, 이름, 이메일로 검색..."
+                    placeholder="사용자 ID, 이메일로 검색..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10 bg-slate-700/50 border-white/10 text-white"
@@ -420,28 +416,17 @@ export function AccountManagementDB() {
                       </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <Label className="text-white">사용자 ID *</Label>
-                          <Input
-                            value={newUser.username}
-                            onChange={(e) => setNewUser({...newUser, username: e.target.value})}
-                            className="bg-slate-700/50 border-white/10 text-white"
-                            placeholder="영문, 숫자 조합"
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-white">이름 *</Label>
-                          <Input
-                            value={newUser.name}
-                            onChange={(e) => setNewUser({...newUser, name: e.target.value})}
-                            className="bg-slate-700/50 border-white/10 text-white"
-                            placeholder="실명 입력"
-                          />
-                        </div>
+                      <div>
+                        <Label className="text-white">사용자 ID *</Label>
+                        <Input
+                          value={newUser.username}
+                          onChange={(e) => setNewUser({...newUser, username: e.target.value})}
+                          className="bg-slate-700/50 border-white/10 text-white"
+                          placeholder="영문, 숫자 조합"
+                        />
                       </div>
                       <div>
-                        <Label className="text-white">이메일 *</Label>
+                        <Label className="text-white">이메일 (선택)</Label>
                         <Input
                           type="email"
                           value={newUser.email}
@@ -458,6 +443,7 @@ export function AccountManagementDB() {
                             value={newUser.password}
                             onChange={(e) => setNewUser({...newUser, password: e.target.value})}
                             className="bg-slate-700/50 border-white/10 text-white"
+                            placeholder="8자 이상"
                           />
                         </div>
                         <div>
@@ -467,26 +453,7 @@ export function AccountManagementDB() {
                             value={newUser.confirmPassword}
                             onChange={(e) => setNewUser({...newUser, confirmPassword: e.target.value})}
                             className="bg-slate-700/50 border-white/10 text-white"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <Label className="text-white">계급</Label>
-                          <Input
-                            value={newUser.rank}
-                            onChange={(e) => setNewUser({...newUser, rank: e.target.value})}
-                            className="bg-slate-700/50 border-white/10 text-white"
-                            placeholder="대위, 중위 등"
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-white">소속 부대</Label>
-                          <Input
-                            value={newUser.unit}
-                            onChange={(e) => setNewUser({...newUser, unit: e.target.value})}
-                            className="bg-slate-700/50 border-white/10 text-white"
-                            placeholder="소속 부대명"
+                            placeholder="비밀번호 재입력"
                           />
                         </div>
                       </div>
@@ -580,14 +547,11 @@ export function AccountManagementDB() {
                       />
                     </TableHead>
                     <TableHead className="text-slate-300">사용자 ID</TableHead>
-                    <TableHead className="text-slate-300">이름</TableHead>
                     <TableHead className="text-slate-300">이메일</TableHead>
-                    <TableHead className="text-slate-300">계급</TableHead>
-                    <TableHead className="text-slate-300">소속</TableHead>
                     <TableHead className="text-slate-300">권한</TableHead>
                     <TableHead className="text-slate-300">상태</TableHead>
-                    <TableHead className="text-slate-300">최근 로그인</TableHead>
                     <TableHead className="text-slate-300">생성일</TableHead>
+                    <TableHead className="text-slate-300">수정일</TableHead>
                     <TableHead className="text-slate-300">작업</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -602,10 +566,7 @@ export function AccountManagementDB() {
                         />
                       </TableCell>
                       <TableCell className="font-medium text-white">{user.username}</TableCell>
-                      <TableCell className="text-slate-300">{user.name}</TableCell>
-                      <TableCell className="text-slate-300">{user.email}</TableCell>
-                      <TableCell className="text-slate-300">{user.rank || '-'}</TableCell>
-                      <TableCell className="text-slate-300">{user.unit || '-'}</TableCell>
+                      <TableCell className="text-slate-300">{user.email || '-'}</TableCell>
                       <TableCell>
                         <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
                           {user.role === 'admin' ? (
@@ -633,8 +594,8 @@ export function AccountManagementDB() {
                           )}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-slate-300">{formatDate(user.lastLoginAt)}</TableCell>
-                      <TableCell className="text-slate-300">{formatDate(user.createdAt)}</TableCell>
+                      <TableCell className="text-slate-300 text-sm">{formatDate(user.createdAt)}</TableCell>
+                      <TableCell className="text-slate-300 text-sm">{formatDate(user.updatedAt)}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Button
@@ -643,6 +604,7 @@ export function AccountManagementDB() {
                             onClick={() => toggleUserStatus(user.id)}
                             disabled={user.id === currentUser?.id}
                             className="border-white/10 text-white"
+                            title={user.isActive ? '비활성화' : '활성화'}
                           >
                             {user.isActive ? (
                               <EyeOff className="w-3 h-3" />

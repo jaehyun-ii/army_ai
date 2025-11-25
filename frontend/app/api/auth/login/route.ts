@@ -56,16 +56,15 @@ export async function POST(request: NextRequest) {
     const payloadJson = Buffer.from(payloadBase64, 'base64').toString()
     const payload = JSON.parse(payloadJson)
 
-    // Create user object from JWT payload
+    // Create user object from JWT payload (matches backend User model)
     const user = {
       id: payload.sub || payload.user_id || '',
       username: payload.username || username,
       email: payload.email || '',
-      name: payload.name || username,
-      rank: payload.rank || null,
-      unit: payload.unit || null,
       role: payload.role || 'user',
-      lastLoginAt: new Date().toISOString()
+      isActive: true, // Assume active since login was successful
+      createdAt: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     }
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)

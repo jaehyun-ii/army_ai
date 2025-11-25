@@ -34,16 +34,15 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: '세션이 만료되었습니다.' }, { status: 401 })
       }
 
-      // Return user info from JWT payload
+      // Return user info from JWT payload (matches backend User model)
       const user = {
         id: payload.sub || payload.user_id || '',
         username: payload.username || '',
         email: payload.email || '',
-        name: payload.name || payload.username || '',
-        rank: payload.rank || null,
-        unit: payload.unit || null,
         role: payload.role || 'user',
-        lastLoginAt: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString()
+        isActive: true, // Assume active if token is valid
+        createdAt: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       }
 
       return NextResponse.json(user)
