@@ -39,10 +39,11 @@ def _register_custom_mmdet_modules():
         try:
             import sys
             import os
-            # Add mmdetection projects to path
-            mmdet_projects_path = "/home/jaehyun/mmdetection/projects"
+            # Add mmdetection projects to path (Docker container path)
+            mmdet_projects_path = "/app/mmdetection/projects"
             if os.path.exists(mmdet_projects_path) and mmdet_projects_path not in sys.path:
                 sys.path.insert(0, mmdet_projects_path)
+                logger.info(f"Added {mmdet_projects_path} to sys.path")
 
             # Import EfficientDet project modules
             from EfficientDet.efficientdet import (
@@ -51,9 +52,9 @@ def _register_custom_mmdet_modules():
                 EfficientDetSepBNHead,
                 HuberLoss
             )
-            logger.info("Standard EfficientDet project modules imported")
+            logger.info("✓ Standard EfficientDet project modules imported successfully")
         except Exception as e:
-            logger.debug(f"Could not import standard EfficientDet project: {e}")
+            logger.debug(f"Could not import standard EfficientDet project (will use custom implementation): {e}")
 
         # Import custom incremental learning modules to trigger registration
         from app.ai.models.efficientdet_incre import (
