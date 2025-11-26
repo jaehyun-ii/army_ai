@@ -3,7 +3,12 @@
  * Proxies YOLO file uploads to the backend
  *
  * Usage: POST /api/datasets/upload-yolo
- * Body: FormData with images, labels, and classes file
+ * Body: FormData with:
+ *   - name: dataset name
+ *   - description: optional dataset description
+ *   - image_files: image files
+ *   - label_files: YOLO label txt files
+ *   - classes_file: classes.txt file
  */
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -20,13 +25,13 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData()
 
     console.log("[/api/datasets/upload-yolo] FormData keys:", Array.from(formData.keys()))
-    console.log("[/api/datasets/upload-yolo] Dataset name:", formData.get('dataset_name'))
-    console.log("[/api/datasets/upload-yolo] Images count:", formData.getAll('images').length)
-    console.log("[/api/datasets/upload-yolo] Labels count:", formData.getAll('labels').length)
+    console.log("[/api/datasets/upload-yolo] Dataset name:", formData.get('name'))
+    console.log("[/api/datasets/upload-yolo] Images count:", formData.getAll('image_files').length)
+    console.log("[/api/datasets/upload-yolo] Labels count:", formData.getAll('label_files').length)
     console.log("[/api/datasets/upload-yolo] Classes file:", formData.get('classes_file') ? 'Present' : 'Missing')
 
     // Validate required fields
-    if (!formData.get('dataset_name')) {
+    if (!formData.get('name')) {
       return NextResponse.json(
         { error: 'Dataset name is required' },
         { status: 400 }
@@ -40,8 +45,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const images = formData.getAll('images')
-    if (!images || images.length === 0) {
+    const imageFiles = formData.getAll('image_files')
+    if (!imageFiles || imageFiles.length === 0) {
       return NextResponse.json(
         { error: 'At least one image is required' },
         { status: 400 }
