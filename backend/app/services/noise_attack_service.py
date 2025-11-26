@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import numpy as np
 import cv2
+import torch
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 from uuid import UUID
@@ -179,9 +180,9 @@ class NoiseAttackService:
                     norm=np.inf,
                     eps=eps_normalized,
                     targeted=False,
-                    batch_size=1,  # Process one image at a time
+                    batch_size=16,  # Process images in batches for better performance
                 )
-                await sse_logger.info(f"FGSM 생성: epsilon={epsilon}")
+                await sse_logger.info(f"FGSM 생성: epsilon={epsilon}, batch_size=16")
 
             elif attack_method == "pgd":
                 # Normalize alpha as well
@@ -195,10 +196,10 @@ class NoiseAttackService:
                     max_iter=iterations,
                     targeted=False,
                     num_random_init=0,
-                    batch_size=1,
+                    batch_size=16,  # Process images in batches for better performance
                     verbose=False,
                 )
-                await sse_logger.info(f"PGD 생성: epsilon={epsilon}, alpha={alpha}, iterations={iterations}")
+                await sse_logger.info(f"PGD 생성: epsilon={epsilon}, alpha={alpha}, iterations={iterations}, batch_size=16")
 
             elif attack_method == "universal_noise":
                 # Universal Noise Attack - PyTorch version with pseudo-GT (feature-complete)
@@ -349,23 +350,21 @@ class NoiseAttackService:
 
                 await sse_logger.info(f"범용 perturbation 학습 완료")
 
-            for idx, img_data in enumerate(images):
-                try:
-                    # Progress update - Send BEFORE attacking (shows current image being processed)
-                    await sse_logger.progress(
-                        f"노이즈 공격 적용 중... ({idx + 1}/{len(images)})",
-                        processed=idx,  # Show completed count
-                        total=len(images),
-                        successful=len(attacked_images),
-                        failed=failed_count,
-                    )
+            # For FGSM/PGD, process all images in batch mode
+            if attack_method in ["fgsm", "pgd"]:
+                await sse_logger.status(f"{attack_method.upper()} 공격을 배치 모드로 적용 중...")
 
-                    # Load image
-                    img = img_data["image"]  # numpy array (H, W, C) in RGB
+                # Prepare all images as batch
+                x_batch_list = []
+                y_batch_list = []
+                resize_info = []  # Track resize info for each image
+
+                for img_data in images:
+                    img = img_data["image"]
                     original_height = img_data.get("original_height", img.shape[0])
                     original_width = img_data.get("original_width", img.shape[1])
 
-                    # Resize to model input size if needed (following notebook approach)
+                    # Resize to model input size if needed
                     model_height, model_width = input_size[0], input_size[1]
                     resized = False
                     if img.shape[0] != model_height or img.shape[1] != model_width:
@@ -375,70 +374,142 @@ class NoiseAttackService:
                         img = np.array(img_pil).astype(np.float32)
                         resized = True
 
-                    # Convert to NCHW format for PyTorch
-                    # ART expects (N, C, H, W) when channels_first=True
-                    x = img.transpose(2, 0, 1)  # (H, W, C) -> (C, H, W)
-                    # Use float32 consistently (models expect float32, not float64)
-                    x = np.expand_dims(x, axis=0).astype(np.float32)  # (C, H, W) -> (1, C, H, W)
+                    # Convert to CHW format
+                    x = img.transpose(2, 0, 1).astype(np.float32)  # (H, W, C) -> (C, H, W)
+                    x_batch_list.append(x)
 
-                    # Generate adversarial example
-                    if attack_method in ["universal_noise", "noise_osfd"] and universal_perturbation is not None:
-                        # Apply pre-trained universal perturbation
-                        x_adv = x + universal_perturbation
-                        if estimator.clip_values is not None:
-                            x_adv = np.clip(x_adv, estimator.clip_values[0], estimator.clip_values[1])
-                    else:
-                        # Generate attack per-image (FGSM, PGD)
-                        # Prepare target labels if target_class is specified
-                        y_target = None
-                        if target_class_id is not None and annotations:
-                            # Convert annotations to ART format for this image
-                            # Adjust bbox coordinates if image was resized
-                            y_target = self._convert_annotations_to_art_format(
-                                annotations,
-                                img_data["id"],
-                                target_class_id,
-                                original_size=(original_height, original_width) if resized else None,
-                                resized_size=(model_height, model_width) if resized else None,
-                            )
+                    # Prepare target labels if specified
+                    y_target = None
+                    if target_class_id is not None and annotations:
+                        y_target = self._convert_annotations_to_art_format(
+                            annotations,
+                            img_data["id"],
+                            target_class_id,
+                            original_size=(original_height, original_width) if resized else None,
+                            resized_size=(model_height, model_width) if resized else None,
+                        )
+                    y_batch_list.append(y_target if y_target else {"boxes": np.array([]), "labels": np.array([]), "scores": np.array([])})
 
-                        def generate_adv():
-                            # Call generate with y parameter for targeted attack
-                            # Note: For Object Detection, y must be a list of dicts
-                            y_arg = [y_target] if y_target is not None else None
-                            result = attack.generate(x=x, y=y_arg)
-                            # Handle both single array and tuple returns
-                            if isinstance(result, tuple):
-                                return result[0]  # Return only adversarial images, not perturbation
-                            return result
-
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            x_adv = await loop.run_in_executor(executor, generate_adv)
-
-                    # Convert back to HWC format
-                    # Output: (1, C, H, W) -> (H, W, C)
-                    adv_img = x_adv[0].transpose(1, 2, 0)  # (C, H, W) -> (H, W, C)
-                    adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
-
-                    attacked_images.append({
-                        "image": adv_img,
-                        "original_file_name": img_data["file_name"],
-                        "original_id": img_data["id"],
+                    resize_info.append({
+                        "resized": resized,
+                        "original_height": original_height,
+                        "original_width": original_width
                     })
 
-                    # Send progress update AFTER completing the image
-                    await sse_logger.progress(
-                        f"노이즈 공격 완료... ({idx + 1}/{len(images)})",
-                        processed=idx + 1,  # Show completed count
-                        total=len(images),
-                        successful=len(attacked_images),
-                        failed=failed_count,
-                    )
+                # Stack into batch (N, C, H, W)
+                x_batch = np.array(x_batch_list)
 
-                except Exception as e:
-                    logger.error(f"Failed to attack image {idx}: {e}", exc_info=True)
-                    failed_count += 1
-                    await sse_logger.warning(f"이미지 {idx} 공격 실패: {str(e)}")
+                # Generate adversarial examples for entire batch
+                def generate_batch():
+                    y_arg = y_batch_list if target_class_id is not None else None
+                    result = attack.generate(x=x_batch, y=y_arg)
+                    if isinstance(result, tuple):
+                        return result[0]
+                    return result
+
+                await sse_logger.progress(
+                    f"{attack_method.upper()} 배치 공격 생성 중... (0/{len(images)})",
+                    processed=0,
+                    total=len(images),
+                    successful=0,
+                    failed=0
+                )
+
+                # Execute attack in background thread (single execution for all images)
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    x_adv_batch = await loop.run_in_executor(executor, generate_batch)
+
+                await sse_logger.info(f"{attack_method.upper()} 배치 공격 완료")
+
+                # Process results
+                for idx, (x_adv, img_data, resize_info_item) in enumerate(zip(x_adv_batch, images, resize_info)):
+                    try:
+                        await sse_logger.progress(
+                            f"결과 처리 중... ({idx + 1}/{len(images)})",
+                            processed=idx + 1,
+                            total=len(images),
+                            successful=len(attacked_images),
+                            failed=failed_count
+                        )
+
+                        # Convert back to HWC format
+                        # x_adv is (C, H, W) from batch
+                        adv_img = x_adv.transpose(1, 2, 0)  # (C, H, W) -> (H, W, C)
+                        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+
+                        attacked_images.append({
+                            "image": adv_img,
+                            "original_file_name": img_data["file_name"],
+                            "original_id": img_data["id"],
+                        })
+
+                        # Send progress update AFTER completing the image
+                        await sse_logger.progress(
+                            f"노이즈 공격 완료... ({idx + 1}/{len(images)})",
+                            processed=idx + 1,
+                            total=len(images),
+                            successful=len(attacked_images),
+                            failed=failed_count,
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to attack image {idx} in batch: {e}", exc_info=True)
+                        failed_count += 1
+                        await sse_logger.warning(f"이미지 {idx} 공격 실패: {str(e)}")
+
+            # For Universal Noise/OSFD, apply pre-trained perturbation to each image in a batch
+            elif attack_method in ["universal_noise", "noise_osfd"] and universal_perturbation is not None:
+                await sse_logger.status(f"{attack_method.upper()}: 학습된 perturbation을 이미지에 적용 중...")
+
+                # Prepare all images for batch application
+                x_batch_list = []
+                for img_data in images:
+                    img = img_data["image"]
+                    # Resize to model input size if needed
+                    model_height, model_width = input_size[0], input_size[1]
+                    if img.shape[0] != model_height or img.shape[1] != model_width:
+                        from PIL import Image
+                        img_pil = Image.fromarray(img.astype(np.uint8))
+                        img_pil = img_pil.resize((model_width, model_height), Image.BICUBIC)
+                        img = np.array(img_pil).astype(np.float32)
+                    
+                    # Convert to CHW format
+                    x = img.transpose(2, 0, 1).astype(np.float32)
+                    x_batch_list.append(x)
+                
+                x_batch = np.array(x_batch_list)
+
+                # Apply universal perturbation to the entire batch via broadcasting
+                x_adv_batch = x_batch + universal_perturbation
+                if estimator.clip_values is not None:
+                    x_adv_batch = np.clip(x_adv_batch, estimator.clip_values[0], estimator.clip_values[1])
+
+                await sse_logger.info(f"Perturbation applied to batch of {len(x_adv_batch)} images.")
+
+                # Process the results
+                for idx, (x_adv, img_data) in enumerate(zip(x_adv_batch, images)):
+                    try:
+                        # Convert back to HWC
+                        adv_img = x_adv.transpose(1, 2, 0)
+                        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+
+                        attacked_images.append({
+                            "image": adv_img,
+                            "original_file_name": img_data["file_name"],
+                            "original_id": img_data["id"],
+                        })
+
+                        await sse_logger.progress(
+                            f"결과 처리 중... ({idx + 1}/{len(images)})",
+                            processed=idx + 1,
+                            total=len(images),
+                            successful=len(attacked_images),
+                            failed=failed_count
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to process perturbed image {idx}: {e}", exc_info=True)
+                        failed_count += 1
+                        await sse_logger.warning(f"이미지 {idx} 처리 실패: {str(e)}")
 
             if not attacked_images:
                 raise ValidationError("All images failed to be attacked")

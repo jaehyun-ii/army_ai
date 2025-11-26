@@ -507,8 +507,10 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
         3. Extract adversarial features
         4. Maximize MSE between adversarial and amplified benign features
 
+        Uses PyTorch DataLoader for efficient batch processing (Type 1 pattern).
+
         Args:
-            x: Input images (B, C, H, W) - PyTorch tensor
+            x: Input images (N, C, H, W) - PyTorch tensor
         """
         logger.info(f"Training OSFD perturbation for {self.max_iter} iterations")
 
@@ -525,72 +527,101 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
         # MSE loss function
         mse_loss = nn.MSELoss()
 
-        # Training loop
+        # Create DataLoader (following PGD PyTorch pattern)
+        dataset = torch.utils.data.TensorDataset(x)
+        data_loader = torch.utils.data.DataLoader(
+            dataset=dataset,
+            batch_size=self.batch_size,
+            shuffle=False,  # Don't shuffle to maintain order
+            drop_last=False
+        )
+
+        logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
+
+        # Training loop with DataLoader (Type 1: PyTorch DataLoader pattern)
         for i_iter in trange(self.max_iter, desc="OSFD Training", disable=not self.verbose):
-            # Extract benign features (no gradients needed)
-            with torch.no_grad():
-                benign_features = self._feature_extractor(x)
+            epoch_loss = 0.0
+            epoch_layer_losses = {layer_idx: 0.0 for layer_idx in self.feature_layer_indices}
 
-            # Apply perturbation
-            x_adv = torch.clamp(x + self._perturbation_torch, 0, 1)
+            # Process batches using DataLoader
+            for batch_id, (x_batch,) in enumerate(data_loader):
+                # Move batch to device
+                x_batch = x_batch.to(self.device)
 
-            # Apply augmentation for robustness
-            if self.apply_augmentation and self._augmentation is not None:
-                x_adv_aug = self._augmentation(x_adv)
-            else:
-                x_adv_aug = x_adv
+                # Extract benign features (no gradients needed)
+                with torch.no_grad():
+                    benign_features = self._feature_extractor(x_batch)
 
-            # Extract adversarial features (with gradients)
-            adv_features = self._feature_extractor(x_adv_aug)
+                # Apply perturbation (broadcast to batch)
+                x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, 0, 1)
 
-            # Compute OSFD loss: maximize MSE between adversarial and amplified benign features
-            total_loss = torch.tensor(0.0, device=self.device)
-            layer_losses = {}
+                # Apply augmentation for robustness
+                if self.apply_augmentation and self._augmentation is not None:
+                    x_adv_aug_batch = self._augmentation(x_adv_batch)
+                else:
+                    x_adv_aug_batch = x_adv_batch
 
-            for layer_idx in self.feature_layer_indices:
-                if layer_idx not in benign_features or layer_idx not in adv_features:
-                    logger.warning(f"Layer {layer_idx} not found in features, skipping")
-                    continue
+                # Extract adversarial features (with gradients)
+                adv_features = self._feature_extractor(x_adv_aug_batch)
 
-                # Target: amplified benign features
-                target_features = self.amplification_factor * benign_features[layer_idx].detach()
-                adv_feat = adv_features[layer_idx]
+                # Compute OSFD loss: maximize MSE between adversarial and amplified benign features
+                total_loss = torch.tensor(0.0, device=self.device)
+                layer_losses = {}
 
-                # Handle shape mismatch with interpolation
-                if adv_feat.shape != target_features.shape:
-                    target_size = target_features.shape[2:]
-                    adv_feat = F.interpolate(
-                        adv_feat,
-                        size=target_size,
-                        mode='bilinear',
-                        align_corners=False
-                    )
-                    logger.debug(
-                        f"Resized layer {layer_idx} features from {adv_features[layer_idx].shape} "
-                        f"to {adv_feat.shape}"
-                    )
+                for layer_idx in self.feature_layer_indices:
+                    if layer_idx not in benign_features or layer_idx not in adv_features:
+                        logger.warning(f"Layer {layer_idx} not found in features, skipping")
+                        continue
 
-                # MSE loss for this layer
-                layer_loss = mse_loss(adv_feat, target_features)
-                total_loss += layer_loss
-                layer_losses[layer_idx] = layer_loss.item()
+                    # Target: amplified benign features
+                    target_features = self.amplification_factor * benign_features[layer_idx].detach()
+                    adv_feat = adv_features[layer_idx]
 
-            # OSFD maximizes distortion -> minimize negative loss
-            loss_to_backward = -total_loss
+                    # Handle shape mismatch with interpolation
+                    if adv_feat.shape != target_features.shape:
+                        target_size = target_features.shape[2:]
+                        adv_feat = F.interpolate(
+                            adv_feat,
+                            size=target_size,
+                            mode='bilinear',
+                            align_corners=False
+                        )
+                        if batch_id == 0 and i_iter == 0:
+                            logger.debug(
+                                f"Resized layer {layer_idx} features from {adv_features[layer_idx].shape} "
+                                f"to {adv_feat.shape}"
+                            )
 
-            # Backpropagation
-            optimizer.zero_grad()
-            loss_to_backward.backward()
-            optimizer.step()
+                    # MSE loss for this layer
+                    layer_loss = mse_loss(adv_feat, target_features)
+                    total_loss += layer_loss
+                    layer_losses[layer_idx] = layer_loss.item()
 
-            # Enforce epsilon constraint using base class
-            self._enforce_epsilon(self.eps)
+                # Accumulate epoch losses
+                epoch_loss += total_loss.item()
+                for layer_idx, loss_val in layer_losses.items():
+                    epoch_layer_losses[layer_idx] += loss_val
+
+                # OSFD maximizes distortion -> minimize negative loss
+                loss_to_backward = -total_loss
+
+                # Backpropagation
+                optimizer.zero_grad()
+                loss_to_backward.backward()
+                optimizer.step()
+
+                # Enforce epsilon constraint using base class
+                self._enforce_epsilon(self.eps)
+
+            # Average losses over batches
+            avg_epoch_loss = epoch_loss / len(data_loader)
+            avg_layer_losses = {k: v / len(data_loader) for k, v in epoch_layer_losses.items()}
 
             # Logging
             if self.verbose and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
                 logger.info(
-                    f"Iter {i_iter}/{self.max_iter}: OSFD Loss = {total_loss.item():.6f}, "
-                    f"Layers: {layer_losses}"
+                    f"Iter {i_iter}/{self.max_iter}: Avg OSFD Loss = {avg_epoch_loss:.6f}, "
+                    f"Layers: {avg_layer_losses}"
                 )
 
     def _check_params(self):

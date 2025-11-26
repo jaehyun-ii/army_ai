@@ -294,8 +294,10 @@ class UniversalNoiseAttackPyTorch(PyTorchUniversalPerturbationAttack):
         """
         Train universal perturbation using PyTorch with ART loss.
 
+        Uses PyTorch DataLoader for efficient batch processing (Type 1 pattern).
+
         Args:
-            x: Input images (B, C, H, W)
+            x: Input images (N, C, H, W)
             y: Optional labels. If provided, use as ground truth. If None, generate pseudo-GT.
         """
         logger.info(f"Training Universal Noise for {self.max_iter} iterations")
@@ -329,17 +331,35 @@ class UniversalNoiseAttackPyTorch(PyTorchUniversalPerturbationAttack):
             pseudo_gts_numpy = self._pseudo_gt_gen.torch_to_numpy_labels(pseudo_gts)
             logger.info(f"Generated pseudo-GT for {len(pseudo_gts)} images")
 
-        # Training loop
-        num_batch = int(np.ceil(x.shape[0] / float(self.batch_size)))
+        # Create custom dataset for labels (cannot use TensorDataset with list of dicts)
+        class LabeledImageDataset(torch.utils.data.Dataset):
+            def __init__(self, images, labels_torch, labels_numpy):
+                self.images = images
+                self.labels_torch = labels_torch
+                self.labels_numpy = labels_numpy
 
+            def __len__(self):
+                return len(self.images)
+
+            def __getitem__(self, idx):
+                return self.images[idx], self.labels_torch[idx], self.labels_numpy[idx]
+
+        # Create dataset and dataloader (following PGD PyTorch pattern)
+        dataset = LabeledImageDataset(x, pseudo_gts, pseudo_gts_numpy)
+        data_loader = torch.utils.data.DataLoader(
+            dataset=dataset,
+            batch_size=self.batch_size,
+            shuffle=False,  # Don't shuffle to maintain order
+            drop_last=False
+        )
+
+        logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
+
+        # Training loop with DataLoader (Type 1: PyTorch DataLoader pattern)
         for i_iter in trange(self.max_iter, desc="Universal Noise Training", disable=not self.verbose):
-            for batch_id in range(num_batch):
-                batch_index_1 = batch_id * self.batch_size
-                batch_index_2 = min((batch_id + 1) * self.batch_size, x.shape[0])
-
-                x_batch = x[batch_index_1:batch_index_2]
-                y_batch_torch = pseudo_gts[batch_index_1:batch_index_2]
-                y_batch_numpy = pseudo_gts_numpy[batch_index_1:batch_index_2]
+            for batch_id, (x_batch, y_batch_torch, y_batch_numpy) in enumerate(data_loader):
+                # Move batch to device
+                x_batch = x_batch.to(self.device)
 
                 # Apply perturbation
                 if self.apply_mask:
