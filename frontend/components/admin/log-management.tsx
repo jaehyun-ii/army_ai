@@ -427,44 +427,46 @@ export function LogManagement() {
           ) : (
             <>
               <div className="rounded-lg border overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-[180px]">시간</TableHead>
-                      <TableHead className="w-[100px]">레벨</TableHead>
-                      <TableHead className="w-[120px]">사용자</TableHead>
-                      <TableHead className="w-[150px]">작업</TableHead>
-                      <TableHead className="w-[130px]">IP 주소</TableHead>
-                      <TableHead>메시지</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {logs.length === 0 ? (
+                <div className="max-h-[600px] overflow-y-auto">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-background z-10">
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          로그가 없습니다
-                        </TableCell>
+                        <TableHead className="w-[180px] bg-muted/50">시간</TableHead>
+                        <TableHead className="w-[100px] bg-muted/50">레벨</TableHead>
+                        <TableHead className="w-[120px] bg-muted/50">사용자</TableHead>
+                        <TableHead className="w-[150px] bg-muted/50">작업</TableHead>
+                        <TableHead className="w-[130px] bg-muted/50">IP 주소</TableHead>
+                        <TableHead className="bg-muted/50">메시지</TableHead>
                       </TableRow>
-                    ) : (
-                      logs.map((log) => (
-                        <TableRow key={log.id}>
-                          <TableCell className="font-mono text-sm">
-                            {formatTimestamp(log.timestamp)}
-                          </TableCell>
-                          <TableCell>{getLevelBadge(log.log_level)}</TableCell>
-                          <TableCell>{log.username || '-'}</TableCell>
-                          <TableCell>{log.action}</TableCell>
-                          <TableCell className="font-mono text-sm">
-                            {log.ip_address || '-'}
-                          </TableCell>
-                          <TableCell className="max-w-[400px] truncate" title={log.message}>
-                            {log.message}
+                    </TableHeader>
+                    <TableBody>
+                      {logs.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                            로그가 없습니다
                           </TableCell>
                         </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                      ) : (
+                        logs.map((log) => (
+                          <TableRow key={log.id}>
+                            <TableCell className="font-mono text-sm">
+                              {formatTimestamp(log.timestamp)}
+                            </TableCell>
+                            <TableCell>{getLevelBadge(log.log_level)}</TableCell>
+                            <TableCell>{log.username || '-'}</TableCell>
+                            <TableCell>{log.action}</TableCell>
+                            <TableCell className="font-mono text-sm">
+                              {log.ip_address || '-'}
+                            </TableCell>
+                            <TableCell className="max-w-[400px] truncate" title={log.message}>
+                              {log.message}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
 
               {/* Pagination */}

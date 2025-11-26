@@ -24,12 +24,14 @@ class SystemLoggingMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         start_time = time.time()
         
-        # Skip logging for health checks, docs, and static files
+        # Skip logging for health checks, docs, static files, and system-logs endpoints
+        # (to prevent recursive logging - viewing logs shouldn't create more logs)
         if request.url.path.startswith("/health") or \
            request.url.path.startswith("/docs") or \
            request.url.path.startswith("/openapi.json") or \
            request.url.path.startswith("/redoc") or \
            request.url.path.startswith("/storage") or \
+           request.url.path.startswith(f"{settings.API_PREFIX}/system-logs") or \
            not request.url.path.startswith(settings.API_PREFIX):
             return await call_next(request)
 

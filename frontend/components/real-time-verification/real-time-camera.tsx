@@ -608,7 +608,9 @@ export function RealTimeCamera() {
                         <div className="flex items-center gap-4">
                           <div className="flex items-center gap-2">
                             <Zap className="w-4 h-4" />
-                            <span className="text-sm">{metrics.fps.toFixed(1)} FPS</span>
+                            <span className="text-sm">
+                              {metrics.fps > 0 ? `${metrics.fps.toFixed(1)} FPS` : '계산 중...'}
+                            </span>
                           </div>
                           {selectedModelInfo && (
                             <div className="flex items-center gap-2">

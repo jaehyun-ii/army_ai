@@ -114,6 +114,17 @@ class RealtimeService:
             self.active_captures[str(run_id)] = cap
             logger.info(f"Started capture for run {run_id} on device {camera_device}")
 
+            # Initialize session stats with default values
+            run_id_str = str(run_id)
+            self.session_stats[run_id_str] = {
+                "fps": 0.0,
+                "total_frames": 0,
+                "total_detections": 0,
+                "avg_inference_time": 0.0,
+                "timestamp": time.time()
+            }
+            logger.info(f"Initialized session stats for run {run_id}")
+
             return {
                 "run_id": str(run_id),
                 "camera_device": camera_device,
