@@ -31,12 +31,12 @@ interface ModelInfo {
 }
 
 interface PerformanceMetrics {
-  fps: number
   detectedObjects: number
   processingTime: number
   totalFrames: number
   successfulDetections: number
 }
+
 
 interface CameraDevice {
   device_id: string
@@ -58,7 +58,6 @@ export function RealTimeCamera() {
   const [isInferenceActive, setIsInferenceActive] = useState(false)
   const [streamKey, setStreamKey] = useState(Date.now())
   const [metrics, setMetrics] = useState<PerformanceMetrics>({
-    fps: 0,
     detectedObjects: 0,
     processingTime: 0,
     totalFrames: 0,
@@ -357,7 +356,6 @@ export function RealTimeCamera() {
           const data = JSON.parse(event.data)
           if (data.is_active && data.stats) {
             setMetrics({
-              fps: data.stats.fps || 0,
               detectedObjects: data.stats.detections || 0,
               processingTime: data.stats.inference_time_ms || 0,
               totalFrames: data.stats.frame_count || 0,
@@ -606,12 +604,7 @@ export function RealTimeCamera() {
                     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
                       <div className="flex items-center justify-between text-white">
                         <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
-                            <Zap className="w-4 h-4" />
-                            <span className="text-sm">
-                              {metrics.fps > 0 ? `${metrics.fps.toFixed(1)} FPS` : '계산 중...'}
-                            </span>
-                          </div>
+
                           {selectedModelInfo && (
                             <div className="flex items-center gap-2">
                               <Brain className="w-4 h-4" />

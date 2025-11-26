@@ -59,7 +59,6 @@ class SystemStatsService:
             import pynvml
             pynvml.nvmlInit()
             device_count = pynvml.nvmlDeviceGetCount()
-            logger.info(f"pynvml check: found {device_count} GPU(s)")
             return device_count > 0
         except ImportError:
             logger.warning("pynvml (nvidia-ml-py) not installed")
@@ -159,10 +158,7 @@ class SystemStatsService:
                     memory_used_mb = mem_info.used / (1024 ** 2)
                     memory_free_mb = mem_info.free / (1024 ** 2)
                     memory_percent = (mem_info.used / mem_info.total * 100) if mem_info.total > 0 else 0
-                    logger.debug(f"GPU {i}: Got memory info via nvmlDeviceGetMemoryInfo")
                 except pynvml.NVMLError as e:
-                    logger.debug(f"GPU {i}: nvmlDeviceGetMemoryInfo not supported (shared memory GPU): {e}")
-
                     # Method 2: Try BAR1 memory (for virtual GPUs)
                     try:
                         bar1_mem = pynvml.nvmlDeviceGetBAR1MemoryInfo(handle)
@@ -170,44 +166,33 @@ class SystemStatsService:
                         memory_used_mb = bar1_mem.bar1Used / (1024 ** 2)
                         memory_free_mb = bar1_mem.bar1Free / (1024 ** 2)
                         memory_percent = (bar1_mem.bar1Used / bar1_mem.bar1Total * 100) if bar1_mem.bar1Total > 0 else 0
-                        logger.debug(f"GPU {i}: Got memory info via BAR1")
                     except pynvml.NVMLError as e2:
-                        logger.debug(f"GPU {i}: Memory queries not supported on this GPU (shared memory architecture)")
+                        pass
 
                 # Get utilization (GPU load)
                 load_percent = None
                 try:
                     util = pynvml.nvmlDeviceGetUtilizationRates(handle)
                     load_percent = float(util.gpu)
-                    logger.debug(f"GPU {i}: Load = {load_percent}%")
                 except pynvml.NVMLError as e:
-                    logger.debug(f"GPU {i}: Utilization not supported: {e}")
+                    pass
 
                 # Get temperature
                 temp = None
                 try:
                     temp = float(pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU))
-                    logger.debug(f"GPU {i}: Temperature = {temp}°C")
                 except pynvml.NVMLError as e:
-                    logger.debug(f"GPU {i}: Temperature not supported: {e}")
+                    pass
 
                 # Get power usage
                 power_watts = None
                 try:
                     power_mw = pynvml.nvmlDeviceGetPowerUsage(handle)
                     power_watts = power_mw / 1000.0  # Convert milliwatts to watts
-                    logger.debug(f"GPU {i}: Power = {power_watts}W")
                 except pynvml.NVMLError as e:
-                    logger.debug(f"GPU {i}: Power usage not supported: {e}")
+                    pass
 
                 mem_str = f"{memory_used_mb:.0f}/{memory_total_mb:.0f}MB" if memory_total_mb else "N/A"
-                logger.info(
-                    f"GPU {i} ({name}): "
-                    f"Load={load_percent}%, "
-                    f"Mem={mem_str}, "
-                    f"Temp={temp}°C, "
-                    f"Power={power_watts}W"
-                )
 
                 gpu_stats.append({
                     "id": i,
@@ -221,7 +206,6 @@ class SystemStatsService:
                     "power_watts": round(power_watts, 2) if power_watts is not None else None,
                 })
 
-            logger.debug(f"pynvml: {len(gpu_stats)} GPU(s) stats collected")
             return {
                 "available": True,
                 "count": len(gpu_stats),
@@ -232,7 +216,6 @@ class SystemStatsService:
             return None
         except Exception as e:
             logger.error(f"pynvml failed: {e}")
-            logger.debug(f"pynvml error details", exc_info=True)
             return None
 
     def _get_gpu_stats_nvidia_smi_OLD(self) -> Optional[Dict]:
@@ -255,7 +238,6 @@ class SystemStatsService:
             root = ET.fromstring(result.stdout)
             gpu_stats = []
 
-            logger.debug(f"nvidia-smi XML parsed, found {len(root.findall('gpu'))} GPUs")
 
             for idx, gpu in enumerate(root.findall('gpu')):
                 # Get name
@@ -278,11 +260,9 @@ class SystemStatsService:
 
                 if mem_total_elem is not None:
                     memory_total_mb = self._parse_float_safe(mem_total_elem.text, 0.0)
-                    logger.debug(f"GPU {idx} fb_memory total: {mem_total_elem.text} -> {memory_total_mb}")
 
                 if mem_used_elem is not None:
                     memory_used_mb = self._parse_float_safe(mem_used_elem.text, 0.0)
-                    logger.debug(f"GPU {idx} fb_memory used: {mem_used_elem.text} -> {memory_used_mb}")
 
                 if mem_free_elem is not None:
                     memory_free_mb = self._parse_float_safe(mem_free_elem.text, 0.0)
@@ -295,7 +275,6 @@ class SystemStatsService:
 
                     if mem_total_elem is not None:
                         memory_total_mb = self._parse_float_safe(mem_total_elem.text, 0.0)
-                        logger.debug(f"GPU {idx} bar1_memory total: {mem_total_elem.text} -> {memory_total_mb}")
 
                     if mem_used_elem is not None:
                         memory_used_mb = self._parse_float_safe(mem_used_elem.text, 0.0)
@@ -308,8 +287,6 @@ class SystemStatsService:
                 # Get temperature
                 temp_elem = gpu.find('.//temperature/gpu_temp')
                 temperature_c = self._parse_float_safe(temp_elem.text if temp_elem is not None else None, 0.0)
-
-                logger.debug(f"GPU {idx} final stats - Total: {memory_total_mb}MB, Used: {memory_used_mb}MB, Temp: {temperature_c}C")
 
                 gpu_stats.append({
                     "id": idx,
@@ -333,7 +310,6 @@ class SystemStatsService:
 
         except Exception as e:
             logger.warning(f"nvidia-smi failed: {e}")
-            logger.debug(f"nvidia-smi error details", exc_info=True)
             return None
 
     def _get_gpu_stats_gputil(self) -> Optional[Dict]:
@@ -367,13 +343,6 @@ class SystemStatsService:
                 memory_free = round(safe_value(gpu.memoryFree, 0.0), 2)
                 temperature = round(safe_value(gpu.temperature, 0.0), 2)
 
-                logger.debug(
-                    f"GPU {gpu.id} ({gpu.name}): "
-                    f"Load={load_percent}%, "
-                    f"Mem={memory_used}/{memory_total}MB, "
-                    f"Temp={temperature}°C"
-                )
-
                 gpu_stats.append({
                     "id": gpu.id,
                     "name": gpu.name,
@@ -385,7 +354,6 @@ class SystemStatsService:
                     "temperature_c": temperature,
                 })
 
-            logger.debug(f"GPUtil: {len(gpu_stats)} GPU(s) stats collected")
             return {
                 "available": True,
                 "count": len(gpus),
@@ -396,20 +364,16 @@ class SystemStatsService:
             return None
         except Exception as e:
             logger.error(f"GPUtil failed: {e}")
-            logger.debug(f"GPUtil error details", exc_info=True)
             return None
 
     def get_gpu_stats(self) -> Optional[Dict]:
         """Get GPU usage statistics using pynvml (NVIDIA Management Library)."""
         if not self.gpu_available:
-            logger.debug("GPU not available, skipping GPU stats")
             return None
 
         # Use pynvml (NVIDIA Management Library)
-        logger.debug("Getting GPU stats via pynvml...")
         result = self._get_gpu_stats_pynvml()
         if result is not None:
-            logger.debug("Successfully got GPU stats from pynvml")
             return result
 
         # If failed

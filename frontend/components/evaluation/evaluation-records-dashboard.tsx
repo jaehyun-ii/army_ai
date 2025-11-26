@@ -226,6 +226,55 @@ export function EvaluationRecordsDashboard() {
     }
   }
 
+  // Calculate reliability for post_attack evaluations
+  const calculateReliability = (record: EvaluationRun) => {
+    if (record.phase !== 'post_attack' || !record.metrics_summary?.map50) {
+      return null
+    }
+
+    // Find matching pre_attack evaluation (by removing "(Clean)" and "(Adversarial)" suffixes)
+    const baseName = record.name.replace(/ \((Clean|Adversarial)\)$/, '')
+    const preAttackRecord = evaluationRuns.find(r =>
+      r.phase === 'pre_attack' &&
+      r.name.replace(/ \((Clean|Adversarial)\)$/, '') === baseName &&
+      r.status === 'completed' &&
+      r.metrics_summary?.map50
+    )
+
+    if (!preAttackRecord || !preAttackRecord.metrics_summary?.map50) {
+      return null
+    }
+
+    const cleanAP50 = preAttackRecord.metrics_summary.map50
+    const attackAP50 = record.metrics_summary.map50
+    const performanceDrop = ((cleanAP50 - attackAP50) / cleanAP50) * 100
+
+    let reliabilityLevel: 'high' | 'medium' | 'low' | 'very-low'
+    let reliabilityText: string
+    let reliabilityColor: string
+
+    if (performanceDrop < 5) {
+      reliabilityLevel = 'high'
+      reliabilityText = '신뢰성 높음'
+      reliabilityColor = 'bg-green-900/20 text-green-300 border-green-500/40'
+    } else if (performanceDrop < 15) {
+      reliabilityLevel = 'medium'
+      reliabilityText = '신뢰성 낮음'
+      reliabilityColor = 'bg-yellow-900/20 text-yellow-300 border-yellow-500/40'
+    } else {
+      reliabilityLevel = 'very-low'
+      reliabilityText = '신뢰성 매우 낮음'
+      reliabilityColor = 'bg-red-900/20 text-red-300 border-red-500/40'
+    }
+
+    return {
+      performanceDrop: performanceDrop.toFixed(1),
+      reliabilityLevel,
+      reliabilityText,
+      reliabilityColor
+    }
+  }
+
   const totalRecords = evaluationRuns.length
   const completedRecords = evaluationRuns.filter(r => r.status === 'completed').length
   const failedRecords = evaluationRuns.filter(r => r.status === 'failed').length
@@ -331,7 +380,7 @@ export function EvaluationRecordsDashboard() {
               <div className="bg-slate-700/30 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <TrendingUp className="w-4 h-4 text-purple-400" />
-                  <span className="text-slate-400 text-sm">평균 mAP@50</span>
+                  <span className="text-slate-400 text-sm">평균 AP@50</span>
                 </div>
                 <div className="text-2xl font-bold text-purple-400">{averageMap50}%</div>
               </div>
@@ -370,7 +419,45 @@ export function EvaluationRecordsDashboard() {
                   <SelectItem value="post_attack">공격 데이터</SelectItem>
                 </SelectContent>
               </Select>
-              <Button variant="outline" className="flex items-center gap-2 bg-slate-700/50 border-white/10 text-white hover:bg-slate-600/50">
+              <Button
+                variant="outline"
+                className="flex items-center gap-2 bg-slate-700/50 border-white/10 text-white hover:bg-slate-600/50"
+                onClick={() => {
+                  if (filteredRecords.length === 0) {
+                    toast.error("내보낼 평가 기록이 없습니다")
+                    return
+                  }
+
+                  // Create CSV content
+                  const headers = ["평가 이름", "모델", "유형", "상태", "AP@50", "Precision", "Recall", "F1-Score", "생성 시간"]
+                  const csvRows = [headers.join(",")]
+
+                  filteredRecords.forEach(record => {
+                    const row = [
+                      `"${record.name}"`,
+                      `"${models[record.model_id]?.name || 'Unknown'}"`,
+                      record.phase === 'pre_attack' ? '기준 데이터' : '공격 데이터',
+                      record.status,
+                      record.metrics_summary?.map50 ? (record.metrics_summary.map50 * 100).toFixed(1) : '-',
+                      record.metrics_summary?.precision ? (record.metrics_summary.precision * 100).toFixed(1) : '-',
+                      record.metrics_summary?.recall ? (record.metrics_summary.recall * 100).toFixed(1) : '-',
+                      record.metrics_summary?.f1 ? (record.metrics_summary.f1 * 100).toFixed(1) : '-',
+                      `"${formatDate(record.created_at)}"`
+                    ]
+                    csvRows.push(row.join(","))
+                  })
+
+                  const csvContent = csvRows.join("\n")
+                  const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' })
+                  const link = document.createElement("a")
+                  link.href = URL.createObjectURL(blob)
+                  link.download = `evaluation_records_${new Date().toISOString().split('T')[0]}.csv`
+                  link.click()
+                  URL.revokeObjectURL(link.href)
+
+                  toast.success(`${filteredRecords.length}개의 평가 기록을 내보냈습니다`)
+                }}
+              >
                 <Download className="w-4 h-4" />
                 내보내기
               </Button>
@@ -415,8 +502,10 @@ export function EvaluationRecordsDashboard() {
                       <TableHead className="text-slate-300">평가 이름</TableHead>
                       <TableHead className="text-slate-300">모델</TableHead>
                       <TableHead className="text-slate-300">유형</TableHead>
+                      <TableHead className="text-slate-300">공격 종류</TableHead>
+                      <TableHead className="text-slate-300">신뢰성</TableHead>
                       <TableHead className="text-slate-300">상태</TableHead>
-                      <TableHead className="text-slate-300">mAP@50</TableHead>
+                      <TableHead className="text-slate-300">AP@50</TableHead>
                       <TableHead className="text-slate-300">생성 시간</TableHead>
                       <TableHead className="text-slate-300">작업</TableHead>
                     </TableRow>
@@ -446,6 +535,28 @@ export function EvaluationRecordsDashboard() {
                           <Badge className={getPhaseBadge(record.phase)}>
                             {getPhaseLabel(record.phase)}
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {record.attack_dataset_id && attackDatasets[record.attack_dataset_id] ? (
+                            <Badge variant="outline" className="text-xs bg-red-900/20 text-red-300 border-red-500/40">
+                              {(attackDatasets[record.attack_dataset_id] as any).attack_type || 'Unknown'}
+                            </Badge>
+                          ) : (
+                            <span className="text-slate-500 text-xs">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {(() => {
+                            const reliability = calculateReliability(record)
+                            if (!reliability) {
+                              return <span className="text-slate-500 text-xs">-</span>
+                            }
+                            return (
+                              <Badge variant="outline" className={`text-xs ${reliability.reliabilityColor}`}>
+                                {reliability.reliabilityText} ({reliability.performanceDrop}%)
+                              </Badge>
+                            )
+                          })()}
                         </TableCell>
                         <TableCell>
                           <Badge className={getStatusBadge(record.status)}>

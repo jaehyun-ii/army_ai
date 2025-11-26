@@ -836,6 +836,40 @@ async def list_captures(
             total_confidence = sum(float(ann.confidence) for ann in annotations if ann.confidence)
             confidence_count = sum(1 for ann in annotations if ann.confidence)
 
+            # Aggregate confidence per class
+            class_stats: dict[str, dict[str, float | int | str | None]] = {}
+            for ann in annotations:
+                class_key = ann.class_name or str(ann.class_index)
+                stats = class_stats.setdefault(
+                    class_key,
+                    {
+                        "class_id": ann.class_index,
+                        "class_name": ann.class_name,
+                        "count": 0,
+                        "confidence_sum": 0.0,
+                        "confidence_count": 0,
+                    },
+                )
+                stats["count"] = int(stats["count"]) + 1  # type: ignore[arg-type]
+                if ann.confidence is not None:
+                    stats["confidence_sum"] = float(stats["confidence_sum"]) + float(ann.confidence)  # type: ignore[arg-type]
+                    stats["confidence_count"] = int(stats["confidence_count"]) + 1  # type: ignore[arg-type]
+
+            avg_confidence_by_class = [
+                {
+                    "class_id": stats["class_id"],
+                    "class_name": stats["class_name"],
+                    "count": stats["count"],
+                    "avg_confidence": (
+                        float(stats["confidence_sum"]) / int(stats["confidence_count"])  # type: ignore[arg-type]
+                        if stats["confidence_count"]
+                        else None
+                    ),
+                }
+                for stats in class_stats.values()
+            ]
+            avg_confidence_by_class.sort(key=lambda item: item["count"] or 0, reverse=True)  # type: ignore[arg-type]
+
             avg_confidence = (total_confidence / confidence_count) if confidence_count > 0 else None
 
             captures.append({
@@ -851,6 +885,7 @@ async def list_captures(
                 "total_images": frame_count,  # Frontend expects total_images
                 "total_detections": total_detections,
                 "avg_confidence_overall": avg_confidence,
+                "avg_confidence_by_class": avg_confidence_by_class,
                 "fps_target": float(run.fps_target) if run.fps_target else None,
                 "notes": run.notes
             })
@@ -906,6 +941,7 @@ async def get_capture_details(
         total_detections = 0
         total_confidence = 0.0
         confidence_count = 0
+        class_stats: dict[str, dict[str, float | int | str | None]] = {}
 
         for frame in frames:
             # Get annotations from database
@@ -933,6 +969,22 @@ async def get_capture_details(
                     total_confidence += float(ann.confidence)
                     confidence_count += 1
 
+                class_key = ann.class_name or str(ann.class_index)
+                stats = class_stats.setdefault(
+                    class_key,
+                    {
+                        "class_id": ann.class_index,
+                        "class_name": ann.class_name,
+                        "count": 0,
+                        "confidence_sum": 0.0,
+                        "confidence_count": 0,
+                    },
+                )
+                stats["count"] = int(stats["count"]) + 1  # type: ignore[arg-type]
+                if ann.confidence is not None:
+                    stats["confidence_sum"] = float(stats["confidence_sum"]) + float(ann.confidence)  # type: ignore[arg-type]
+                    stats["confidence_count"] = int(stats["confidence_count"]) + 1  # type: ignore[arg-type]
+
             images.append({
                 "id": str(frame.id),
                 "frame_number": frame.seq_no,
@@ -944,6 +996,20 @@ async def get_capture_details(
             })
 
         avg_confidence = (total_confidence / confidence_count) if confidence_count > 0 else None
+        avg_confidence_by_class = [
+            {
+                "class_id": stats["class_id"],
+                "class_name": stats["class_name"],
+                "count": stats["count"],
+                "avg_confidence": (
+                    float(stats["confidence_sum"]) / int(stats["confidence_count"])  # type: ignore[arg-type]
+                    if stats["confidence_count"]
+                    else None
+                ),
+            }
+            for stats in class_stats.values()
+        ]
+        avg_confidence_by_class.sort(key=lambda item: item["count"] or 0, reverse=True)  # type: ignore[arg-type]
 
         # Build response
         capture_data = {
@@ -958,6 +1024,7 @@ async def get_capture_details(
             "total_images": len(frames),
             "total_detections": total_detections,
             "avg_confidence_overall": avg_confidence,
+            "avg_confidence_by_class": avg_confidence_by_class,
             "fps_target": float(run.fps_target) if run.fps_target else None,
             "notes": run.notes
         }

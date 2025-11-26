@@ -411,6 +411,42 @@ async def delete_evaluation_item(
         )
 
 
+# ========== Class Metrics Endpoints ==========
+
+@router.get("/runs/{run_id}/class-metrics")
+async def get_evaluation_class_metrics(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get per-class metrics for an evaluation run.
+
+    Returns metrics for each class including:
+    - AP metrics (map, map50, map75)
+    - Precision, Recall, F1
+    - Ground truth count and prediction count
+    """
+    # Check if evaluation run exists
+    eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
+    if not eval_run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    # Get class metrics
+    class_metrics = await crud_evaluation.get_eval_class_metrics(db=db, run_id=run_id)
+
+    # Format response
+    return [
+        {
+            "class_name": cm.class_name,
+            "metrics": cm.metrics,
+        }
+        for cm in class_metrics
+    ]
+
+
 # ========== Visualization Endpoints ==========
 
 def get_class_color(class_name: str) -> tuple:
@@ -493,8 +529,13 @@ def draw_bounding_boxes(image: np.ndarray, detections: List[dict], title: str = 
         (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(img, (x1, y1 - label_h - 10), (x1 + label_w + 10, y1), color, -1)
 
-        # Draw label text
-        cv2.putText(img, label, (x1 + 5, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
+        # Draw label text with black outline for better visibility on any background color
+        text_x, text_y = x1 + 5, y1 - 5
+        # Draw black outline (thicker)
+        cv2.putText(img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX,
+                   0.5, (0, 0, 0), 3)
+        # Draw white text on top
+        cv2.putText(img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX,
                    0.5, (255, 255, 255), 1)
 
     return img

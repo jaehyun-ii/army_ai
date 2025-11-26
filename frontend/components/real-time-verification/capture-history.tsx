@@ -1,16 +1,33 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/hooks/use-toast"
 import { AdversarialToolLayout } from "@/components/layouts/adversarial-tool-layout"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert"
+import {
   FileText,
   Trash2,
   History,
   Image as ImageIcon,
+  Calculator,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  ArrowRight
 } from "lucide-react"
 
 // No longer needed - using Next.js API routes
@@ -162,11 +179,220 @@ function ImageWithBoundingBoxes({
   )
 }
 
+// Reliability Evaluation Component
+function ReliabilityEvaluator({
+  captures,
+  onEvaluate,
+  evaluationResult,
+  isEvaluating
+}: {
+  captures: any[]
+  onEvaluate: (cleanId: string, attackedId: string, label: string) => void
+  evaluationResult: any
+  isEvaluating: boolean
+}) {
+  const [cleanSessionId, setCleanSessionId] = useState<string>("")
+  const [attackedSessionId, setAttackedSessionId] = useState<string>("")
+  const [targetLabel, setTargetLabel] = useState<string>("")
+  const [commonLabels, setCommonLabels] = useState<string[]>([])
+  const [isLoadingLabels, setIsLoadingLabels] = useState(false)
+
+  // Fetch common labels when both sessions are selected
+  useEffect(() => {
+    if (cleanSessionId && attackedSessionId) {
+      fetchCommonLabels()
+    } else {
+      setCommonLabels([])
+      setTargetLabel("")
+    }
+  }, [cleanSessionId, attackedSessionId])
+
+  const fetchCommonLabels = async () => {
+    setIsLoadingLabels(true)
+    try {
+      // Fetch details for both sessions to extract labels
+      const [cleanRes, attackedRes] = await Promise.all([
+        fetch(getApiEndpoint(`/api/camera/captures/${cleanSessionId}`)),
+        fetch(getApiEndpoint(`/api/camera/captures/${attackedSessionId}`))
+      ])
+
+      if (!cleanRes.ok || !attackedRes.ok) throw new Error("Failed to fetch session details")
+
+      const cleanData = await cleanRes.json()
+      const attackedData = await attackedRes.json()
+
+      // Extract unique labels from both
+      const getLabels = (data: any) => {
+        const labels = new Set<string>()
+        data.images?.forEach((img: any) => {
+          img.detections?.forEach((det: any) => labels.add(det.class_name))
+        })
+        return labels
+      }
+
+      const cleanLabels = getLabels(cleanData)
+      const attackedLabels = getLabels(attackedData)
+
+      // Find intersection
+      const common = Array.from(cleanLabels).filter(label => attackedLabels.has(label))
+      setCommonLabels(common)
+    } catch (error) {
+      console.error("Error fetching labels:", error)
+    } finally {
+      setIsLoadingLabels(false)
+    }
+  }
+
+  const handleEvaluate = () => {
+    if (cleanSessionId && attackedSessionId && targetLabel) {
+      onEvaluate(cleanSessionId, attackedSessionId, targetLabel)
+    }
+  }
+
+  return (
+    <Card className="bg-slate-800/50 border-white/10 mb-6">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-lg flex items-center gap-2 text-white">
+          <Calculator className="w-5 h-5 text-blue-400" />
+          신뢰성 평가 (Reliability Evaluation)
+        </CardTitle>
+        <CardDescription className="text-slate-400">
+          적대적 공격 전후의 데이터셋을 비교하여 모델의 신뢰성을 평가합니다.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div className="space-y-2">
+            <label className="text-xs text-slate-400">적대적 공격 미적용 (Clean)</label>
+            <Select value={cleanSessionId} onValueChange={setCleanSessionId}>
+              <SelectTrigger className="bg-slate-900/50 border-white/10 text-white">
+                <SelectValue placeholder="세션 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                {captures.map(c => (
+                  <SelectItem key={c.id} value={c.id.toString()}>
+                    #{c.id} ({new Date(c.created_at).toLocaleString()})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs text-slate-400">적대적 공격 적용 (Attacked)</label>
+            <Select value={attackedSessionId} onValueChange={setAttackedSessionId}>
+              <SelectTrigger className="bg-slate-900/50 border-white/10 text-white">
+                <SelectValue placeholder="세션 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                {captures.map(c => (
+                  <SelectItem key={c.id} value={c.id.toString()} disabled={c.id.toString() === cleanSessionId}>
+                    #{c.id} ({new Date(c.created_at).toLocaleString()})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs text-slate-400">평가대상 라벨</label>
+            <Select value={targetLabel} onValueChange={setTargetLabel} disabled={!cleanSessionId || !attackedSessionId || isLoadingLabels}>
+              <SelectTrigger className="bg-slate-900/50 border-white/10 text-white">
+                <SelectValue placeholder={isLoadingLabels ? "로딩 중..." : "라벨 선택"} />
+              </SelectTrigger>
+              <SelectContent>
+                {commonLabels.length === 0 ? (
+                  <SelectItem value="none" disabled>공통 라벨 없음</SelectItem>
+                ) : (
+                  commonLabels.map(label => (
+                    <SelectItem key={label} value={label}>{label}</SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Button
+            onClick={handleEvaluate}
+            disabled={!targetLabel || isEvaluating}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            {isEvaluating ? "평가 중..." : "신뢰도 평가"}
+          </Button>
+        </div>
+
+        {evaluationResult && (
+          <div className="mt-6 p-4 bg-slate-900/50 rounded-lg border border-white/10 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-white font-medium flex items-center gap-2">
+                <FileText className="w-4 h-4" /> 평가 결과: {evaluationResult.label}
+              </h4>
+              <Badge
+                variant="outline"
+                className={`${
+                  evaluationResult.status === 'High' ? 'bg-green-500/20 text-green-400 border-green-500/50' :
+                  evaluationResult.status === 'Low' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50' :
+                  'bg-red-500/20 text-red-400 border-red-500/50'
+                }`}
+              >
+                신뢰성 {evaluationResult.status === 'High' ? '높음' : evaluationResult.status === 'Low' ? '낮음' : '매우 낮음'}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div className="bg-slate-800/50 p-3 rounded border border-white/5">
+                <span className="text-slate-400 block mb-1">Clean 평균 신뢰도</span>
+                <span className="text-white font-mono text-lg">{(evaluationResult.cleanConf * 100).toFixed(2)}%</span>
+              </div>
+              <div className="flex items-center justify-center text-slate-500">
+                <ArrowRight className="w-5 h-5" />
+              </div>
+              <div className="bg-slate-800/50 p-3 rounded border border-white/5">
+                <span className="text-slate-400 block mb-1">Attacked 평균 신뢰도</span>
+                <span className="text-white font-mono text-lg">{(evaluationResult.attackedConf * 100).toFixed(2)}%</span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center gap-2 text-sm">
+              <span className="text-slate-400">성능 하락율:</span>
+              <span className={`font-mono font-bold ${
+                evaluationResult.dropRate < 0.05 ? 'text-green-400' :
+                evaluationResult.dropRate < 0.15 ? 'text-yellow-400' : 'text-red-400'
+              }`}>
+                {(evaluationResult.dropRate * 100).toFixed(2)}%
+              </span>
+              <span className="text-slate-500 text-xs ml-2">
+                (기준: 5% 미만 높음, 15% 미만 낮음, 15% 이상 매우 낮음)
+              </span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function CaptureHistory() {
   const { toast } = useToast()
   const [captureHistory, setCaptureHistory] = useState<any[]>([])
   const [selectedCapture, setSelectedCapture] = useState<any>(null)
   const [captureImages, setCaptureImages] = useState<any[]>([])
+  
+  // Reliability Evaluation State
+  const [evalResult, setEvalResult] = useState<any>(null)
+  const [isEvaluating, setIsEvaluating] = useState(false)
+  const [selectedConfidenceClass, setSelectedConfidenceClass] = useState<string>("")
+
+  const classAverages = useMemo(() => selectedCapture?.avg_confidence_by_class || [], [selectedCapture])
+  const selectedClassStat = useMemo(() => {
+    if (!selectedConfidenceClass) return null
+    return (
+      classAverages.find((cls: any) => {
+        const key = cls.class_name || String(cls.class_id || "")
+        return key === selectedConfidenceClass
+      }) || null
+    )
+  }, [classAverages, selectedConfidenceClass])
 
   // Load capture history on mount
   useEffect(() => {
@@ -191,9 +417,85 @@ export function CaptureHistory() {
       const response = await fetch(endpoint)
       const data = await response.json()
       setSelectedCapture(data.capture)
+      const firstClass = data.capture?.avg_confidence_by_class?.[0]
+      setSelectedConfidenceClass(firstClass ? (firstClass.class_name || String(firstClass.class_id || "")) : "")
       setCaptureImages(data.images || [])
     } catch (error) {
       console.error('Failed to load capture details:', error)
+    }
+  }
+
+  // Perform Reliability Evaluation
+  const performEvaluation = async (cleanId: string, attackedId: string, label: string) => {
+    setIsEvaluating(true)
+    setEvalResult(null)
+    try {
+      // 1. Fetch full details for both sessions to get confidence scores
+      const [cleanRes, attackedRes] = await Promise.all([
+        fetch(getApiEndpoint(`/api/camera/captures/${cleanId}`)),
+        fetch(getApiEndpoint(`/api/camera/captures/${attackedId}`))
+      ])
+
+      if (!cleanRes.ok || !attackedRes.ok) throw new Error("Failed to fetch session data")
+
+      const cleanData = await cleanRes.json()
+      const attackedData = await attackedRes.json()
+
+      // 2. Calculate average confidence for the target label
+      const calculateAvgConf = (data: any, target: string) => {
+        let totalConf = 0
+        let count = 0
+        data.images?.forEach((img: any) => {
+          img.detections?.forEach((det: any) => {
+            if (det.class_name === target) {
+              totalConf += det.confidence
+              count++
+            }
+          })
+        })
+        return count > 0 ? totalConf / count : 0
+      }
+
+      const cleanAvg = calculateAvgConf(cleanData, label)
+      const attackedAvg = calculateAvgConf(attackedData, label)
+
+      if (cleanAvg === 0) {
+        toast({
+          title: "평가 불가",
+          description: "Clean 데이터셋에서 해당 라벨의 탐지 기록을 찾을 수 없습니다.",
+          variant: "destructive"
+        })
+        setIsEvaluating(false)
+        return
+      }
+
+      // 3. Calculate Drop Rate
+      // Formula: (Clean - Attacked) / Clean
+      const dropRate = (cleanAvg - attackedAvg) / cleanAvg
+
+      // 4. Determine Reliability Status
+      let status = "Very Low"
+      if (dropRate < 0.05) status = "High"      // < 5%
+      else if (dropRate < 0.15) status = "Low"  // < 15%
+      // else >= 15% is Very Low
+
+      setEvalResult({
+        label,
+        cleanConf: cleanAvg,
+        attackedConf: attackedAvg,
+        dropRate,
+        status
+      })
+
+    } catch (error) {
+      console.error("Evaluation failed:", error)
+      toast({
+        title: "평가 실패",
+        description: "신뢰성 평가 중 오류가 발생했습니다.",
+        variant: "destructive"
+      })
+    } finally {
+      setIsEvaluating(false)
     }
   }
 
@@ -235,6 +537,7 @@ export function CaptureHistory() {
       if (selectedCapture && selectedCapture.id === captureId) {
         setSelectedCapture(null)
         setCaptureImages([])
+        setSelectedConfidenceClass("")
       }
 
       toast({
@@ -272,6 +575,7 @@ export function CaptureHistory() {
                 onClick={() => {
                   setSelectedCapture(null)
                   setCaptureImages([])
+                  setSelectedConfidenceClass("")
                 }}
                 variant="outline"
                 size="sm"
@@ -298,6 +602,15 @@ export function CaptureHistory() {
         description: "저장된 캡처 세션 및 이미지",
         children: (
           <div className="h-full overflow-y-auto">
+
+          {!selectedCapture && (
+            <ReliabilityEvaluator
+              captures={captureHistory}
+              onEvaluate={performEvaluation}
+              evaluationResult={evalResult}
+              isEvaluating={isEvaluating}
+            />
+          )}
 
           {!selectedCapture ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -362,6 +675,21 @@ export function CaptureHistory() {
                               : 'N/A'}
                           </span>
                         </div>
+                        {capture.avg_confidence_by_class && capture.avg_confidence_by_class.length > 0 && (
+                          <div className="pt-2 border-t border-white/10">
+                            <div className="text-[10px] text-slate-400 mb-1">클래스별 평균</div>
+                            <div className="flex flex-wrap gap-1">
+                              {capture.avg_confidence_by_class.slice(0, 3).map((cls: any) => (
+                                <Badge key={`${capture.id}-${cls.class_id}-${cls.class_name}`} variant="secondary" className="text-[10px] px-2 py-1 bg-slate-900/70 border-slate-700">
+                                  <span className="mr-1">{cls.class_name || cls.class_id}</span>
+                                  <span className="text-green-300 font-semibold">
+                                    {cls.avg_confidence ? (cls.avg_confidence * 100).toFixed(1) : 'N/A'}%
+                                  </span>
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -404,6 +732,58 @@ export function CaptureHistory() {
                   </Button>
                 </div>
               </div>
+
+              {classAverages.length > 0 && (
+                <div className="bg-slate-800/50 rounded-lg p-4 border border-white/10">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm text-slate-200 font-medium">클래스별 평균 Confidence</div>
+                    <Select
+                      value={selectedConfidenceClass || (classAverages[0]?.class_name || String(classAverages[0]?.class_id || ""))}
+                      onValueChange={(value) => setSelectedConfidenceClass(value)}
+                    >
+                      <SelectTrigger className="w-44 bg-slate-900/60 border-slate-700 text-white">
+                        <SelectValue placeholder="라벨 선택" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {classAverages.map((cls: any) => {
+                          const key = cls.class_name || String(cls.class_id || "")
+                          return (
+                            <SelectItem key={key} value={key}>
+                              {cls.class_name || cls.class_id || 'unknown'}
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {classAverages.map((cls: any) => {
+                      const label = cls.class_name || cls.class_id || 'unknown'
+                      return (
+                        <Badge
+                          key={`${selectedCapture.id}-${label}`}
+                          variant="secondary"
+                          className="text-[11px] px-2 py-1 bg-slate-900/70 border-slate-700"
+                        >
+                          <span className="mr-2">{label}</span>
+                          <span className="text-green-300 font-semibold">
+                            {cls.avg_confidence ? (cls.avg_confidence * 100).toFixed(1) : 'N/A'}%
+                          </span>
+                        </Badge>
+                      )
+                    })}
+                  </div>
+                  {selectedClassStat && (
+                    <div className="mt-3 text-sm text-slate-300">
+                      선택 라벨 평균:{" "}
+                      <span className="text-white font-semibold">
+                        {selectedClassStat.avg_confidence ? (selectedClassStat.avg_confidence * 100).toFixed(2) : 'N/A'}%
+                      </span>
+                      <span className="text-slate-400 ml-2">(탐지 {selectedClassStat.count || 0}개)</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-5 gap-3">
                 {captureImages.map((image: any) => (

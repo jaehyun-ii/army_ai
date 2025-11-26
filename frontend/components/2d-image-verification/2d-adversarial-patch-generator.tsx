@@ -31,7 +31,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
-  X
+  X,
+  Info
 } from "lucide-react"
 import { AdversarialToolLayout } from "@/components/layouts/adversarial-tool-layout"
 import {
@@ -106,6 +107,9 @@ export function AdversarialPatchGeneratorUpdated() {
   const [patchName, setPatchName] = useState<string>("")
   const [previewImageIndex, setPreviewImageIndex] = useState(0)
   const imagesPerPage = 20
+  const learningRatePresets = [1, 2.5, 5, 10]
+  const iterationPresets = [50, 100, 200, 500]
+  const patchSizePresets = [80, 120, 150, 200]
 
   const [attackConfig, setAttackConfig] = useState<AttackConfig>({
     method: "robust_dpatch", // Default to robust_dpatch
@@ -179,12 +183,32 @@ export function AdversarialPatchGeneratorUpdated() {
           storageKey: storageKey  // Add storage key for image URL
         }])
         toast.success("적대적 패치 생성이 완료되었습니다")
+        setBatchProgress(prev => prev ? {
+          ...prev,
+          processed: prev.total,
+          currentImage: "완료",
+          estimatedTime: "완료"
+        } : null)
+        setIsGenerating(false)
+        setShowPatchResult(true)
+        setPatchName("")
+        setSelectedDataset("")
+        setAttackConfig(prev => ({ ...prev, targetClass: "" }))
+        setSelectedModel("")
+        setAvailableClasses([])
+        setDatasetImages([])
+        setPreviewImageIndex(0)
+        if (eventSource) {
+          eventSource.close()
+          setEventSource(null)
+        }
       } else {
         console.error('[useEffect] No patch_id found in completion log')
         console.error('[useEffect] Completion log:', completionLog)
+        setIsGenerating(false)
       }
     }
-  }, [trainingLogs, generatedPatches, isGenerating, attackConfig, selectedDataset, availableDatasets])
+  }, [trainingLogs, generatedPatches, isGenerating, attackConfig, selectedDataset, availableDatasets, eventSource])
 
   // 한국어 클래스명 매핑 함수
   const getKoreanClassName = (englishName: string): string => {
@@ -445,6 +469,23 @@ export function AdversarialPatchGeneratorUpdated() {
       return
     }
 
+    const safeIterations = Math.max(50, Math.min(attackConfig.iterations, 2000))
+    const safeLearningRate = Math.min(Math.max(attackConfig.learningRate, 0.1), 20)
+    const safePatchSize = Math.max(50, Math.min(attackConfig.patchSize, 300))
+
+    if (
+      safeIterations !== attackConfig.iterations ||
+      safeLearningRate !== attackConfig.learningRate ||
+      safePatchSize !== attackConfig.patchSize
+    ) {
+      setAttackConfig(prev => ({
+        ...prev,
+        iterations: safeIterations,
+        learningRate: safeLearningRate,
+        patchSize: safePatchSize
+      }))
+    }
+
     setIsGenerating(true)
     setShowPatchResult(false)
     setTrainingLogs([])
@@ -559,9 +600,9 @@ export function AdversarialPatchGeneratorUpdated() {
         target_class: attackConfig.targetClass,
         model_path: selectedModel,
         attack_method: attackConfig.method, // Added: attack method selection
-        iterations: attackConfig.iterations,
-        patch_size: attackConfig.patchSize,
-        learning_rate: attackConfig.learningRate, // Added: learning rate parameter
+        iterations: safeIterations,
+        patch_size: safePatchSize,
+        learning_rate: safeLearningRate, // Added: learning rate parameter
         session_id: sessionId  // Pass the same session_id
       }
 
@@ -620,7 +661,7 @@ export function AdversarialPatchGeneratorUpdated() {
           placeholder="패치 이름 입력"
           value={patchName}
           onChange={(e) => setPatchName(e.target.value)}
-          disabled={showPatchResult && generatedPatches.length > 0}
+          disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
         />
         {patchName && (
           <div className="text-xs text-slate-400">
@@ -632,7 +673,7 @@ export function AdversarialPatchGeneratorUpdated() {
       {/* 데이터셋 선택 */}
       <div className="space-y-2">
         <Label>데이터셋 선택</Label>
-        <Select value={selectedDataset} onValueChange={setSelectedDataset} disabled={showPatchResult && generatedPatches.length > 0}>
+        <Select value={selectedDataset} onValueChange={setSelectedDataset} disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}>
           <SelectTrigger>
             <SelectValue placeholder="데이터셋 선택" />
           </SelectTrigger>
@@ -660,7 +701,7 @@ export function AdversarialPatchGeneratorUpdated() {
         <Select
           value={attackConfig.targetClass}
           onValueChange={(v) => setAttackConfig({...attackConfig, targetClass: v})}
-          disabled={!selectedDataset || availableClasses.length === 0 || (showPatchResult && generatedPatches.length > 0)}
+          disabled={isGenerating || !selectedDataset || availableClasses.length === 0 || (showPatchResult && generatedPatches.length > 0)}
         >
           <SelectTrigger>
             <SelectValue placeholder={
@@ -694,7 +735,7 @@ export function AdversarialPatchGeneratorUpdated() {
         <Select
           value={attackConfig.method}
           onValueChange={(v) => setAttackConfig({...attackConfig, method: v as "patch" | "dpatch" | "robust_dpatch"})}
-          disabled={showPatchResult && generatedPatches.length > 0}
+          disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
         >
           <SelectTrigger>
             <SelectValue />
@@ -719,6 +760,14 @@ export function AdversarialPatchGeneratorUpdated() {
         </Select>
       </div>
 
+      <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3 text-xs text-slate-300 flex gap-3">
+        <Info className="w-4 h-4 text-blue-400 mt-0.5" />
+        <div className="space-y-1">
+          <p className="font-medium text-slate-200">왜 패치 옵션이 3개인가요?</p>
+          <p>Adversarial Patch는 다양한 변환에 강한 일반 패치, DPatch는 객체 탐지기에 특화된 기본 패치, RobustDPatch는 크롭·회전·밝기 변화를 견딜 수 있도록 확장한 버전입니다. 공격 목표와 데이터셋 특성에 맞춰 선택하세요.</p>
+        </div>
+      </div>
+
       {/* 학습률 */}
       <div className="space-y-2">
         <Label>학습률 (Learning Rate)</Label>
@@ -729,12 +778,27 @@ export function AdversarialPatchGeneratorUpdated() {
             min={0.1}
             max={20}
             step={0.1}
-            disabled={showPatchResult && generatedPatches.length > 0}
+            disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
             className="flex-1"
           />
           <span className="text-sm text-white min-w-[60px] text-right">
             {attackConfig.learningRate.toFixed(1)}
           </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {learningRatePresets.map((value) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={Math.abs(attackConfig.learningRate - value) < 1e-6 ? "default" : "outline"}
+              onClick={() => setAttackConfig({...attackConfig, learningRate: value})}
+              disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
+              className="h-8"
+            >
+              {value}
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -745,15 +809,30 @@ export function AdversarialPatchGeneratorUpdated() {
           <Slider
             value={[attackConfig.iterations]}
             onValueChange={(values) => setAttackConfig({...attackConfig, iterations: values[0]})}
-            min={10}
+            min={50}
             max={500}
             step={10}
-            disabled={showPatchResult && generatedPatches.length > 0}
+            disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
             className="flex-1"
           />
           <span className="text-sm text-white min-w-[60px] text-right">
             {attackConfig.iterations}
           </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {iterationPresets.map((value) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={attackConfig.iterations === value ? "default" : "outline"}
+              onClick={() => setAttackConfig({...attackConfig, iterations: value})}
+              disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
+              className="h-8"
+            >
+              {value}회
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -767,19 +846,34 @@ export function AdversarialPatchGeneratorUpdated() {
             min={50}
             max={300}
             step={10}
-            disabled={showPatchResult && generatedPatches.length > 0}
+            disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
             className="flex-1"
           />
           <span className="text-sm text-white min-w-[60px] text-right">
             {attackConfig.patchSize}px
           </span>
         </div>
+        <div className="flex flex-wrap gap-2">
+          {patchSizePresets.map((value) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={attackConfig.patchSize === value ? "default" : "outline"}
+              onClick={() => setAttackConfig({...attackConfig, patchSize: value})}
+              disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
+              className="h-8"
+            >
+              {value}px
+            </Button>
+          ))}
+        </div>
       </div>
 
       {/* AI 모델 선택 */}
       <div className="space-y-2">
         <Label>대상 AI 모델</Label>
-        <Select value={selectedModel} onValueChange={setSelectedModel} disabled={showPatchResult && generatedPatches.length > 0}>
+        <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}>
           <SelectTrigger>
             <SelectValue placeholder="모델 선택" />
           </SelectTrigger>
@@ -1057,7 +1151,7 @@ export function AdversarialPatchGeneratorUpdated() {
               <div className="flex items-center justify-between gap-2 flex-shrink-0">
                 <Button
                   onClick={() => setPreviewImageIndex(Math.max(0, previewImageIndex - 1))}
-                  disabled={previewImageIndex === 0}
+                  disabled={isGenerating || previewImageIndex === 0}
                   variant="outline"
                   size="sm"
                   className="flex-1 border-white/20 text-white hover:bg-slate-700"
@@ -1067,7 +1161,7 @@ export function AdversarialPatchGeneratorUpdated() {
                 </Button>
                 <Button
                   onClick={() => setPreviewImageIndex(Math.min(datasetImages.length - 1, previewImageIndex + 1))}
-                  disabled={previewImageIndex === datasetImages.length - 1}
+                  disabled={isGenerating || previewImageIndex === datasetImages.length - 1}
                   variant="outline"
                   size="sm"
                   className="flex-1 border-white/20 text-white hover:bg-slate-700"

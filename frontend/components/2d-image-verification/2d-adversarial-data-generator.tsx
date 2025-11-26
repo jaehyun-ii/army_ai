@@ -199,9 +199,33 @@ export function AdversarialDataGeneratorUpdated() {
         }])
 
         toast.success("공격 데이터셋 생성이 완료되었습니다")
+        setAttackProgress(prev => prev ? {
+          ...prev,
+          total: totalProcessed || prev.total,
+          processed: totalProcessed || prev.total,
+          successful: successful || prev.successful,
+          failed: failed || prev.failed,
+          currentImage: "완료",
+          estimatedTime: "완료"
+        } : null)
+        setIsGenerating(false)
+        setShowResults(true)
+        setDatasetName("")
+        setSelectedDataset("")
+        setTargetClass("")
+        setSelectedPatch("")
+        setSelectedModel("")
+        setAvailableClasses([])
+        setDatasetImages([])
+        setCurrentPage(1)
+        setPreviewImageIndex(0)
+        if (eventSource) {
+          eventSource.close()
+          setEventSource(null)
+        }
       }
     }
-  }, [generationLogs, generatedDatasetId, generationResults, isGenerating, datasetName, attackType])
+  }, [generationLogs, generatedDatasetId, generationResults, isGenerating, datasetName, attackType, eventSource])
 
   // Load result images when showResults becomes true
   useEffect(() => {
@@ -677,8 +701,9 @@ export function AdversarialDataGeneratorUpdated() {
 
       const response = await startAdversarialDataGeneration(config)
       console.log('[AttackGen] Generation started:', response)
-      if (response.output_dataset_id) {
-        setGeneratedDatasetId(response.output_dataset_id)
+      const newDatasetId = response.output_dataset_id || response.generation_id || null
+      if (newDatasetId) {
+        setGeneratedDatasetId(newDatasetId)
       }
       toast.success("공격 데이터셋 생성이 시작되었습니다")
 
@@ -721,12 +746,13 @@ export function AdversarialDataGeneratorUpdated() {
           value={datasetName}
           onChange={(e) => setDatasetName(e.target.value)}
           placeholder="공격 데이터셋 이름 입력"
+          disabled={isGenerating}
         />
       </div>
 
       <div className="space-y-2">
         <Label>데이터셋 선택</Label>
-        <Select value={selectedDataset} onValueChange={setSelectedDataset}>
+        <Select value={selectedDataset} onValueChange={setSelectedDataset} disabled={isGenerating}>
           <SelectTrigger>
             <SelectValue placeholder="데이터셋 선택" />
           </SelectTrigger>
@@ -753,7 +779,7 @@ export function AdversarialDataGeneratorUpdated() {
         <Select
           value={targetClass}
           onValueChange={setTargetClass}
-          disabled={!selectedDataset || availableClasses.length === 0}
+          disabled={isGenerating || !selectedDataset || availableClasses.length === 0}
         >
           <SelectTrigger>
             <SelectValue placeholder={
@@ -781,7 +807,7 @@ export function AdversarialDataGeneratorUpdated() {
         </Select>
       </div>
 
-      <Tabs value={attackType} onValueChange={(v) => setAttackType(v as "patch" | "noise")}>
+      <Tabs value={attackType} onValueChange={(v) => { if (isGenerating) return; setAttackType(v as "patch" | "noise") }}>
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="patch">
             <Grid3x3 className="w-4 h-4 mr-2" />
@@ -809,7 +835,10 @@ export function AdversarialDataGeneratorUpdated() {
                         ? 'bg-primary/10 border-primary'
                         : 'bg-slate-900/50 border-white/10 hover:border-white/20'
                     }`}
-                    onClick={() => setSelectedPatch(patch.id)}
+                    onClick={() => {
+                      if (isGenerating) return
+                      setSelectedPatch(patch.id)
+                    }}
                   >
                     <div className="flex items-start gap-2">
                       {patch.previewUrl && (
@@ -837,7 +866,7 @@ export function AdversarialDataGeneratorUpdated() {
           </div>
           <div className="space-y-2">
             <Label>패치 크기 비율</Label>
-            <Select value={patchScale.toString()} onValueChange={(value) => setPatchScale(Number(value))}>
+            <Select value={patchScale.toString()} onValueChange={(value) => setPatchScale(Number(value))} disabled={isGenerating}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -853,7 +882,7 @@ export function AdversarialDataGeneratorUpdated() {
         <TabsContent value="noise" className="space-y-4 mt-4">
           <div className="space-y-2">
             <Label>대상 AI 모델</Label>
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
+            <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isGenerating}>
               <SelectTrigger>
                 <SelectValue placeholder="모델 선택" />
               </SelectTrigger>
@@ -876,6 +905,7 @@ export function AdversarialDataGeneratorUpdated() {
             <Select
               value={noiseConfig.method}
               onValueChange={(v) => setNoiseConfig(prev => ({ ...prev, method: v }))}
+              disabled={isGenerating}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -903,6 +933,7 @@ export function AdversarialDataGeneratorUpdated() {
                 max={20}
                 step={0.5}
                 className="flex-1"
+                disabled={isGenerating}
               />
               <span className="text-sm text-white min-w-[60px] text-right">
                 {noiseConfig.epsilon.toFixed(1)}
@@ -922,6 +953,7 @@ export function AdversarialDataGeneratorUpdated() {
                     max={5}
                     step={0.1}
                     className="flex-1"
+                    disabled={isGenerating}
                   />
                   <span className="text-sm text-white min-w-[60px] text-right">
                     {noiseConfig.alpha.toFixed(1)}
@@ -939,6 +971,7 @@ export function AdversarialDataGeneratorUpdated() {
                     max={noiseConfig.method === "universal_noise" ? 100 : 50}
                     step={1}
                     className="flex-1"
+                    disabled={isGenerating}
                   />
                   <span className="text-sm text-white min-w-[60px] text-right">
                     {noiseConfig.iterations}
@@ -1264,7 +1297,7 @@ export function AdversarialDataGeneratorUpdated() {
                   variant="outline"
                   size="sm"
                   onClick={() => setPreviewImageIndex(Math.max(0, previewImageIndex - 1))}
-                  disabled={previewImageIndex === 0}
+                  disabled={isGenerating || previewImageIndex === 0}
                   className="flex-shrink-0"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -1285,7 +1318,7 @@ export function AdversarialDataGeneratorUpdated() {
                   variant="outline"
                   size="sm"
                   onClick={() => setPreviewImageIndex(Math.min(datasetImages.length - 1, previewImageIndex + 1))}
-                  disabled={previewImageIndex >= datasetImages.length - 1}
+                  disabled={isGenerating || previewImageIndex >= datasetImages.length - 1}
                   className="flex-shrink-0"
                 >
                   <ChevronRight className="w-4 h-4" />

@@ -68,6 +68,8 @@ export function UnifiedEvaluationDashboard() {
   const [selectedBaseDataset, setSelectedBaseDataset] = useState("")
   const [selectedAttackDataset, setSelectedAttackDataset] = useState("")
   const [datasetTab, setDatasetTab] = useState<"base" | "attack">("base")
+  const [targetClass, setTargetClass] = useState<string>("")
+  const [availableClasses, setAvailableClasses] = useState<string[]>([])
 
   // Data states
   const models: Model[] = useMemo(() => modelsData || [], [modelsData])
@@ -118,6 +120,31 @@ export function UnifiedEvaluationDashboard() {
   useEffect(() => {
     setCurrentImagePage(0)
   }, [selectedBaseDataset, selectedAttackDataset])
+
+  // Load available classes when base dataset is selected
+  useEffect(() => {
+    if (selectedBaseDataset) {
+      loadDatasetClasses(selectedBaseDataset)
+    } else {
+      setAvailableClasses([])
+      setTargetClass("")
+    }
+  }, [selectedBaseDataset])
+
+  const loadDatasetClasses = async (datasetId: string) => {
+    try {
+      const summary: any = await apiClient.getDatasetAnnotationsSummary(datasetId)
+      const classes = Object.keys(summary.class_distribution || {}).sort()
+      setAvailableClasses(classes)
+      // Auto-select first class if available
+      if (classes.length > 0 && !targetClass) {
+        setTargetClass(classes[0])
+      }
+    } catch (error) {
+      console.error("Failed to load dataset classes:", error)
+      setAvailableClasses([])
+    }
+  }
 
   const loadDatasets = async () => {
     try {
@@ -219,10 +246,32 @@ export function UnifiedEvaluationDashboard() {
       return
     }
 
+    // Check for duplicate evaluation names
+    try {
+      const existingEvaluations: any = await apiClient.getEvaluationRuns(1, 1000)
+      const evaluations = existingEvaluations?.items || existingEvaluations || []
+      const duplicateNames = evaluations.filter((run: any) => {
+        const runName = run.name.replace(/ \((Clean|Adversarial)\)$/, '')
+        return evaluationName.trim() === runName.trim()
+      })
+
+      if (duplicateNames.length > 0) {
+        toast.error(`평가 이름 "${evaluationName}"은(는) 이미 사용 중입니다. 다른 이름을 입력해주세요.`)
+        return
+      }
+    } catch (error) {
+      console.error("Failed to check duplicate evaluation names:", error)
+      // Continue anyway if check fails
+    }
+
     setIsSubmitting(true)
     setIsEvaluating(true)
     setEvaluationLogs([])
     setEvaluationCompleted(false)
+    setShowResults(false)
+    setEvaluationResults([])
+    setCompletedEvaluationIds([])
+    setComparisonData(null)
 
     // SSE connection tracking
     let eventSources: EventSource[] = []
@@ -258,9 +307,13 @@ export function UnifiedEvaluationDashboard() {
       if (selectedBaseDataset && selectedAttackDataset) {
         // Create two runs: one for clean, one for adversarial
         addLog("→ 기준 데이터셋 평가 생성 중...")
+        const cleanRunDescription = description ? `${description}\n기준 데이터셋 평가` : "기준 데이터셋 평가"
+        const cleanRunDescWithTarget = targetClass
+          ? `${cleanRunDescription}\n타겟 클래스: ${targetClass}`
+          : cleanRunDescription
         const cleanRun: any = await apiClient.createEvaluationRun({
           name: `${evaluationName} (Clean)`,
-          description: description ? `${description}\n기준 데이터셋 평가` : "기준 데이터셋 평가",
+          description: cleanRunDescWithTarget,
           phase: "pre_attack",
           model_id: selectedModel,
           base_dataset_id: selectedBaseDataset,
@@ -269,9 +322,13 @@ export function UnifiedEvaluationDashboard() {
         addLog(`✓ 기준 평가 생성됨 (ID: ${cleanRun.id})`)
 
         addLog("→ 공격 데이터셋 평가 생성 중...")
+        const advRunDescription = description ? `${description}\n공격 데이터셋 평가` : "공격 데이터셋 평가"
+        const advRunDescWithTarget = targetClass
+          ? `${advRunDescription}\n타겟 클래스: ${targetClass}`
+          : advRunDescription
         const advRun: any = await apiClient.createEvaluationRun({
           name: `${evaluationName} (Adversarial)`,
-          description: description ? `${description}\n공격 데이터셋 평가` : "공격 데이터셋 평가",
+          description: advRunDescWithTarget,
           phase: "post_attack",
           model_id: selectedModel,
           base_dataset_id: selectedBaseDataset,
@@ -288,7 +345,11 @@ export function UnifiedEvaluationDashboard() {
         }
 
         // Add optional fields only if they exist
-        if (description) runData.description = description
+        let runDescription = description || ""
+        if (targetClass) {
+          runDescription += (runDescription ? "\n" : "") + `타겟 클래스: ${targetClass}`
+        }
+        if (runDescription) runData.description = runDescription
         if (evalBaseDatasetId) runData.base_dataset_id = evalBaseDatasetId
         if (evalAttackDatasetId) runData.attack_dataset_id = evalAttackDatasetId
 
@@ -375,6 +436,9 @@ export function UnifiedEvaluationDashboard() {
 
       toast.success("평가가 성공적으로 시작되었습니다")
 
+      // Reset evaluation name for next evaluation
+      setEvaluationName("")
+
       // Close SSE connections after 5 minutes (cleanup)
       setTimeout(() => {
         eventSources.forEach(es => es.close())
@@ -423,18 +487,28 @@ export function UnifiedEvaluationDashboard() {
         // Fetch evaluation run details
         const evalRun: any = await apiClient.getEvaluationRun(evalId)
 
-        // Class metrics removed - not used
-        // let classMetrics: any[] = []
-        // try {
-        //   const metricsResponse: any = await apiClient.getEvaluationClassMetrics(evalId)
-        //   classMetrics = metricsResponse.items || []
-        // } catch (e) {
-        //   console.error("Failed to load class metrics:", e)
-        // }
+        // Load class metrics for target class display
+        let classMetrics: any[] = []
+        try {
+          const metricsResponse: any = await apiClient.getEvaluationClassMetrics(evalId)
+          classMetrics = metricsResponse || []
+        } catch (e) {
+          console.error("Failed to load class metrics:", e)
+        }
+
+        // Extract target class from description
+        let targetClassName = ""
+        if (evalRun.description) {
+          const match = evalRun.description.match(/타겟 클래스:\s*(.+?)(?:\n|$)/i)
+          if (match) {
+            targetClassName = match[1].trim()
+          }
+        }
 
         results.push({
           ...evalRun,
-          // classMetrics,  // Removed
+          classMetrics,
+          targetClassName,
         })
       }
 
@@ -488,48 +562,7 @@ export function UnifiedEvaluationDashboard() {
         icon: Plus,
         children: (
           <div className="space-y-4">
-            {/* Evaluation Name */}
-            <div className="space-y-2">
-              <Label htmlFor="eval-name" className="text-white">평가 이름 *</Label>
-              <Input
-                id="eval-name"
-                value={evaluationName}
-                onChange={(e) => setEvaluationName(e.target.value)}
-                placeholder="예: YOLOv8 종합 신뢰성 평가"
-                className="bg-slate-700/50 border-white/10 text-white"
-              />
-            </div>
-
-            {/* Description */}
-            <div className="space-y-2">
-              <Label htmlFor="eval-description" className="text-white">설명</Label>
-              <Textarea
-                id="eval-description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="평가에 대한 설명을 입력하세요"
-                className="bg-slate-700/50 border-white/10 text-white min-h-[80px]"
-              />
-            </div>
-
-            {/* Model Selection */}
-            <div className="space-y-2">
-              <Label className="text-white">평가 모델 *</Label>
-              <Select value={selectedModel} onValueChange={setSelectedModel}>
-                <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
-                  <SelectValue placeholder="모델을 선택하세요" />
-                </SelectTrigger>
-                <SelectContent>
-                  {models.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Dataset Selection with Tabs */}
+            {/* Dataset Selection with Tabs - MOVED TO TOP */}
             <div className="space-y-2">
               <Label className="text-white">평가 데이터셋 (선택)</Label>
               <Tabs value={datasetTab} onValueChange={(value) => setDatasetTab(value as "base" | "attack")} className="w-full">
@@ -603,6 +636,70 @@ export function UnifiedEvaluationDashboard() {
                 </TabsContent>
               </Tabs>
             </div>
+
+            {/* Evaluation Name */}
+            <div className="space-y-2">
+              <Label htmlFor="eval-name" className="text-white">평가 이름 *</Label>
+              <Input
+                id="eval-name"
+                value={evaluationName}
+                onChange={(e) => setEvaluationName(e.target.value)}
+                placeholder="예: YOLOv8 종합 신뢰성 평가"
+                className="bg-slate-700/50 border-white/10 text-white"
+              />
+            </div>
+
+            {/* Description */}
+            <div className="space-y-2">
+              <Label htmlFor="eval-description" className="text-white">설명</Label>
+              <Textarea
+                id="eval-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="평가에 대한 설명을 입력하세요"
+                className="bg-slate-700/50 border-white/10 text-white min-h-[80px]"
+              />
+            </div>
+
+            {/* Model Selection */}
+            <div className="space-y-2">
+              <Label className="text-white">평가 모델 *</Label>
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
+                  <SelectValue placeholder="모델을 선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {models.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Target Class Selection (only shown when base dataset is selected) */}
+            {selectedBaseDataset && availableClasses.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-white">
+                  타겟 클래스 (선택사항)
+                  <span className="text-xs text-slate-400 ml-2">선택한 클래스의 AP@50을 별도로 표시합니다</span>
+                </Label>
+                <Select value={targetClass} onValueChange={setTargetClass}>
+                  <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
+                    <SelectValue placeholder="타겟 클래스 선택 (선택사항)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">전체 클래스</SelectItem>
+                    {availableClasses.map((className) => (
+                      <SelectItem key={className} value={className}>
+                        {className}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Evaluation Summary */}
             {(selectedBaseDataset || selectedAttackDataset) && (
@@ -751,11 +848,17 @@ export function UnifiedEvaluationDashboard() {
                           {result.metrics_summary && (
                             <div className="mb-4">
                               <h5 className="text-slate-300 text-sm font-medium mb-2">전체 메트릭</h5>
-                              <div className="grid grid-cols-3 gap-3">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                                 <div className="bg-slate-900/50 rounded p-3">
-                                  <p className="text-xs text-slate-400 mb-1">mAP@50</p>
+                                  <p className="text-xs text-slate-400 mb-1">AP@50 (전체)</p>
                                   <p className="text-lg font-bold text-blue-400">
                                     {(result.metrics_summary.map50 * 100).toFixed(1)}%
+                                  </p>
+                                </div>
+                                <div className="bg-slate-900/50 rounded p-3">
+                                  <p className="text-xs text-slate-400 mb-1">F1-Score</p>
+                                  <p className="text-lg font-bold text-cyan-400">
+                                    {((result.metrics_summary.f1 || 0) * 100).toFixed(1)}%
                                   </p>
                                 </div>
                                 <div className="bg-slate-900/50 rounded p-3">
@@ -771,6 +874,55 @@ export function UnifiedEvaluationDashboard() {
                                   </p>
                                 </div>
                               </div>
+
+                              {/* Target Class Metrics */}
+                              {result.targetClassName && result.classMetrics && (
+                                <div className="mt-3 bg-amber-900/20 border border-amber-500/30 rounded p-3">
+                                  <h5 className="text-amber-300 text-sm font-semibold mb-2">
+                                    타겟 클래스: {result.targetClassName}
+                                  </h5>
+                                  {(() => {
+                                    const targetMetric = result.classMetrics.find(
+                                      (cm: any) => cm.class_name === result.targetClassName
+                                    )
+                                    if (!targetMetric) {
+                                      return (
+                                        <p className="text-xs text-slate-400">
+                                          타겟 클래스 메트릭을 찾을 수 없습니다
+                                        </p>
+                                      )
+                                    }
+                                    return (
+                                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <div>
+                                          <p className="text-xs text-amber-200">AP@50</p>
+                                          <p className="text-lg font-bold text-amber-400">
+                                            {((targetMetric.metrics?.map50 || 0) * 100).toFixed(1)}%
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs text-amber-200">Precision</p>
+                                          <p className="text-base font-semibold text-amber-300">
+                                            {((targetMetric.metrics?.precision || 0) * 100).toFixed(1)}%
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs text-amber-200">Recall</p>
+                                          <p className="text-base font-semibold text-amber-300">
+                                            {((targetMetric.metrics?.recall || 0) * 100).toFixed(1)}%
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs text-amber-200">GT 수</p>
+                                          <p className="text-base font-semibold text-amber-300">
+                                            {targetMetric.metrics?.gt_count || 0}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
+                                </div>
+                              )}
                             </div>
                           )}
 

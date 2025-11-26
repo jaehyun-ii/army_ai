@@ -179,6 +179,19 @@ class APIClient {
     return this.request(`/api/datasets/${id}/stats`)
   }
 
+  async getDatasetAnnotationsSummary(datasetId: string): Promise<{
+    total_annotations: number
+    class_distribution: Record<string, number>
+    avg_confidence_per_class: Record<string, number>
+    unique_classes: number
+  }> {
+    return this.request(`/api/annotations/dataset/${datasetId}/summary`)
+  }
+
+  async getEvaluationClassMetrics(runId: string): Promise<any[]> {
+    return this.request(`/api/evaluation/runs/${runId}/class-metrics`)
+  }
+
   async getDatasetDetectionStats(id: string, data: {
     detection_model_id: string  // Frontend parameter name for backward compatibility
     conf_threshold?: number

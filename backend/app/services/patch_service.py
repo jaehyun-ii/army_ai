@@ -148,6 +148,14 @@ class PatchService:
             model_height, model_width = input_size[0], input_size[1]
             await sse_logger.info(f"모델 입력 크기: {model_width}x{model_height}")
 
+            # Ensure patch size fits into the resized model input
+            patch_size_px = min(patch_size, model_height, model_width)
+            if patch_size_px != patch_size:
+                await sse_logger.warning(
+                    f"요청한 패치 크기({patch_size}px)가 입력 크기 {model_width}x{model_height}을 초과하여 "
+                    f"{patch_size_px}px로 조정합니다."
+                )
+
             # Step 3: Prepare training data (resize all images to model input size)
             await sse_logger.status("이미지 전처리 중...")
             x_train_list_hwc = []  # For DPatch/RobustDPatch (HWC format)
@@ -170,9 +178,9 @@ class PatchService:
             # Prepare data based on attack method
             # AdversarialPatchPyTorch expects NCHW, DPatch/RobustDPatch expect NHWC
             if attack_method == "patch":
-                x_train = np.stack(x_train_list_chw, axis=0).astype(np.float32)  # (N, C, H, W)
+                x_train = np.ascontiguousarray(np.stack(x_train_list_chw, axis=0).astype(np.float32))  # (N, C, H, W)
             else:  # dpatch or robust_dpatch
-                x_train = np.stack(x_train_list_hwc, axis=0).astype(np.float32)  # (N, H, W, C)
+                x_train = np.ascontiguousarray(np.stack(x_train_list_hwc, axis=0).astype(np.float32))  # (N, H, W, C)
 
             await sse_logger.info(f"학습 데이터 준비 완료: {x_train.shape}")
 
@@ -227,8 +235,8 @@ class PatchService:
                     learning_rate=learning_rate,
                     max_iter=iterations,
                     batch_size=1,  # REQUIRED: different images have different number of target boxes
-                    patch_shape=(3, patch_size, patch_size),  # CHW
-                    patch_type="circle",
+                    patch_shape=(3, patch_size_px, patch_size_px),  # CHW
+                    patch_type="square",
                     optimizer="Adam",
                     targeted=False,  # Untargeted: evade detection (from notebook)
                     verbose=True,  # Enable verbose logging to see iteration progress
@@ -237,7 +245,7 @@ class PatchService:
                 # DPatch (does not support 'targeted' parameter)
                 attack = DPatch(
                     estimator=estimator,
-                    patch_shape=(patch_size, patch_size, 3),  # HWC
+                    patch_shape=(patch_size_px, patch_size_px, 3),  # HWC
                     learning_rate=learning_rate,
                     max_iter=iterations,
                     batch_size=1,  # REQUIRED: different images have different number of target boxes
@@ -245,9 +253,14 @@ class PatchService:
                 )
             else:  # robust_dpatch
                 # RobustDPatch with targeted attack on specific class
+                patch_location_center = (
+                    max(0, (model_height - patch_size_px) // 2),
+                    max(0, (model_width - patch_size_px) // 2),
+                )
                 attack = RobustDPatch(
                     estimator=estimator,
-                    patch_shape=(patch_size, patch_size, 3),  # HWC
+                    patch_shape=(patch_size_px, patch_size_px, 3),  # HWC
+                    patch_location=patch_location_center,
                     learning_rate=learning_rate,
                     max_iter=iterations,
                     batch_size=1,  # REQUIRED: different images have different number of target boxes
@@ -399,7 +412,8 @@ class PatchService:
                     target_class=target_class,
                     method=attack_method,
                     hyperparameters={
-                        "patch_size": patch_size,
+                        "patch_size": patch_size_px,
+                        "requested_patch_size": patch_size,
                         "learning_rate": learning_rate,
                         "iterations": iterations,
                         "training_images": len(training_images),
