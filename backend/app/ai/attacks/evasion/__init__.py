@@ -14,7 +14,9 @@ from app.ai.attacks.evasion.projected_gradient_descent.projected_gradient_descen
 
 # Patch attacks
 from app.ai.attacks.evasion.dpatch import DPatch
+from app.ai.attacks.evasion.dpatch_pytorch import DPatchPyTorch
 from app.ai.attacks.evasion.dpatch_robust import RobustDPatch
+from app.ai.attacks.evasion.dpatch_robust_pytorch import RobustDPatchPyTorch
 from app.ai.attacks.evasion.adversarial_patch.adversarial_patch import AdversarialPatch
 from app.ai.attacks.evasion.adversarial_patch.adversarial_patch_pytorch import AdversarialPatchPyTorch
 from app.ai.attacks.evasion.adversarial_patch.adversarial_patch_numpy import AdversarialPatchNumpy

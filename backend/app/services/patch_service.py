@@ -23,7 +23,7 @@ from app.services.estimator_loader_service import EstimatorLoaderService
 from app.services.model_inference_service import model_inference_service
 
 # ART imports - use real ART library for patch attacks
-from app.ai.attacks.evasion import AdversarialPatchPyTorch, RobustDPatch, DPatch
+from app.ai.attacks.evasion import AdversarialPatchPyTorch, RobustDPatchPyTorch, DPatchPyTorch
 from app.ai.estimators.object_detection import PyTorchYolo as ARTPyTorchYolo
 
 logger = logging.getLogger(__name__)
@@ -243,7 +243,7 @@ class PatchService:
                 )
             elif attack_method == "dpatch":
                 # DPatch (does not support 'targeted' parameter)
-                attack = DPatch(
+                attack = DPatchPyTorch(
                     estimator=estimator,
                     patch_shape=(patch_size_px, patch_size_px, 3),  # HWC
                     learning_rate=learning_rate,
@@ -257,7 +257,7 @@ class PatchService:
                     max(0, (model_height - patch_size_px) // 2),
                     max(0, (model_width - patch_size_px) // 2),
                 )
-                attack = RobustDPatch(
+                attack = RobustDPatchPyTorch(
                     estimator=estimator,
                     patch_shape=(patch_size_px, patch_size_px, 3),  # HWC
                     patch_location=patch_location_center,

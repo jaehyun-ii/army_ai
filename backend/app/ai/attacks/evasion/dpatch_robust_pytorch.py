@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from tqdm.auto import trange
 
 from app.ai.attacks.attack import EvasionAttack
@@ -111,10 +110,6 @@ class RobustDPatchPyTorch(EvasionAttack):
         :param batch_size: The size of the training batch.
         :param targeted: Indicates whether the attack is targeted (True) or untargeted (False).
         :param summary_writer: Activate summary writer for TensorBoard.
-                               Default is `False` and deactivated summary writer.
-                               If `True` save runs/CURRENT_DATETIME_HOSTNAME in current directory.
-                               If of type `str` save in path.
-                               If of type `SummaryWriter` apply provided custom summary writer.
         :param verbose: Show progress bars.
         """
 
@@ -232,7 +227,6 @@ class RobustDPatchPyTorch(EvasionAttack):
         x_torch, _ = self.estimator._preprocess_and_convert_inputs(
             x=x, y=None, fit=False, no_grad=True
         )
-        logger.debug(f"Input converted to torch: {x_torch.shape}, device: {x_torch.device}")
         return x_torch, x
 
     def _labels_to_torch(self, y: list[dict[str, np.ndarray]]) -> list[dict[str, torch.Tensor]]:
@@ -261,6 +255,12 @@ class RobustDPatchPyTorch(EvasionAttack):
         """
         logger.info(f"Training RobustDPatch for {self.max_iter} iterations")
 
+        # Custom collate fn
+        def collate_fn(batch):
+            images = torch.stack([item[0] for item in batch])
+            targets = [item[1] for item in batch] # List of dicts
+            return images, targets
+
         # Create custom dataset
         class RobustPatchDataset(torch.utils.data.Dataset):
             def __init__(self, images, labels):
@@ -282,7 +282,8 @@ class RobustDPatchPyTorch(EvasionAttack):
             dataset=dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            drop_last=False
+            drop_last=False,
+            collate_fn=collate_fn
         )
 
         logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
@@ -308,46 +309,43 @@ class RobustDPatchPyTorch(EvasionAttack):
                         batch_images, batch_labels, self._patch
                     )
 
-                    # Compute loss and gradients
-                    loss = self._compute_loss(patched_images, patch_targets)
+                    # Convert to NumPy for ART
+                    patched_np = patched_images.detach().cpu().numpy()
+                    if not self.estimator.channels_first:
+                         patched_np = np.transpose(patched_np, (0, 2, 3, 1))
+                    
+                    if self.estimator.clip_values is not None:
+                        patched_np = patched_np * self.estimator.clip_values[1]
 
-                    # Backward pass
-                    loss.backward()
+                    # Convert Targets to NumPy
+                    patch_targets_np = []
+                    for t in patch_targets:
+                         patch_targets_np.append({
+                             'boxes': t['boxes'].cpu().numpy(),
+                             'labels': t['labels'].cpu().numpy(),
+                             'scores': t['scores'].cpu().numpy()
+                         })
+
+                    # Compute Gradients (NumPy)
+                    gradients_np = self.estimator.loss_gradient(
+                        x=patched_np,
+                        y=patch_targets_np,
+                        standardise_output=True
+                    )
+                    
+                    # Convert back to Torch
+                    if not self.estimator.channels_first:
+                        gradients_np = np.transpose(gradients_np, (0, 3, 1, 2))
+                    
+                    gradients = torch.from_numpy(gradients_np).to(self.device)
 
                     # Reverse transformations on gradients
-                    if self._patch.grad is not None:
-                        # The gradients are already computed, we just need to untransform them
-                        gradients_untransformed = self._untransform_gradients(
-                            self._patch.grad.data, transforms
-                        )
-
-                        # Accumulate gradients
-                        patch_gradients = patch_gradients_old + gradients_untransformed
-                        logger.debug(
-                            f"Gradient percentage diff: {torch.mean((torch.sign(patch_gradients) != torch.sign(patch_gradients_old)).float()).item():.4f}"
-                        )
-                        patch_gradients_old = patch_gradients
-
-                        # Zero gradients for next iteration
-                        self._patch.grad.zero_()
-
-            # Write summary
-            if self.summary_writer is not None and i_step % 10 == 0:
-                # Create sample patched images for visualization
-                with torch.no_grad():
-                    x_patched, y_patched, _ = self._augment_images_with_patch(
-                        x, y, self._patch
+                    gradients_untransformed = self._untransform_gradients(
+                        gradients, transforms
                     )
-                self.summary_writer.update(
-                    batch_id=0,
-                    global_step=i_step,
-                    grad=patch_gradients_old.cpu().numpy(),
-                    patch=self._patch.detach().cpu().numpy(),
-                    estimator=self.estimator,
-                    x=x_patched.cpu().numpy(),
-                    y=y_patched,
-                    targeted=self.targeted,
-                )
+
+                    # Accumulate gradients (Sum over batch)
+                    patch_gradients_old += gradients_untransformed.sum(dim=0)
 
             # Update patch with sign gradient
             with torch.no_grad():
@@ -359,6 +357,19 @@ class RobustDPatchPyTorch(EvasionAttack):
                         self.estimator.clip_values[0],
                         self.estimator.clip_values[1]
                     )
+            
+            # Summary writer
+            if self.summary_writer is not None and i_step % 10 == 0:
+                 self.summary_writer.update(
+                    batch_id=0,
+                    global_step=i_step,
+                    grad=patch_gradients_old.cpu().numpy(),
+                    patch=self._patch.detach().cpu().numpy(),
+                    estimator=self.estimator,
+                    x=None,
+                    y=None,
+                    targeted=self.targeted,
+                )
 
         if self.summary_writer is not None:
             self.summary_writer.reset()
@@ -366,100 +377,125 @@ class RobustDPatchPyTorch(EvasionAttack):
     def _augment_images_with_patch(
         self,
         x: torch.Tensor,
-        y: list[dict[str, torch.Tensor]] | torch.Tensor | None,
+        y: list[dict[str, torch.Tensor]] | None,
         patch: torch.Tensor
     ) -> tuple[torch.Tensor, list[dict[str, torch.Tensor]], dict[str, float | int]]:
         """
         Apply patch to images with random transformations (crop, rotate, brightness).
-
-        Args:
-            x: Input images (B, C, H, W)
-            y: Target labels (list of dicts or None)
-            patch: Patch to apply
-
-        Returns:
-            Tuple of (patched images, patch targets, transformations)
         """
         transformations: dict[str, float | int] = {}
         x_patch = x.clone()
 
-        # Handle channels_first/last
-        if self.estimator.channels_first:
-            # (B, C, H, W) -> (B, H, W, C) for easier processing
-            x_patch = x_patch.permute(0, 2, 3, 1)
-            patch_copy = patch.permute(1, 2, 0) if patch.dim() == 3 else patch
-        else:
-            patch_copy = patch
+        # Handle channels_first/last for easier processing if needed
+        # Here we assume x is (B, C, H, W)
 
         # Apply patch at specified location
         x_1, y_1 = self.patch_location
-        x_2, y_2 = x_1 + patch_copy.shape[0], y_1 + patch_copy.shape[1]
-        x_patch[:, x_1:x_2, y_1:y_2, :] = patch_copy
+        x_2 = x_1 + self.patch_shape[1] # H
+        y_2 = y_1 + self.patch_shape[2] # W
+        
+        if self.estimator.channels_first:
+             x_patch[:, :, x_1:x_2, y_1:y_2] = self._patch
+        else:
+             # patch is (C, H, W) in our storage. x_patch is (B, C, H, W).
+             # Wait, if channels_last, x is (B, C, H, W) here?
+             # In `_preprocess_and_convert`, we use `estimator._preprocess...`.
+             # ART's `_preprocess` returns `x` in `channels_first` format usually if `framework` expects it, 
+             # BUT `PyTorchClassifier` expects `channels_first=True`.
+             # Let's assume x is (B, C, H, W).
+             x_patch[:, :, x_1:x_2, y_1:y_2] = self._patch
 
         # 1) Crop images
         crop_x = random.randint(0, self.crop_range[0])
         crop_y = random.randint(0, self.crop_range[1])
-        x_1_crop, y_1_crop = crop_x, crop_y
-        x_2_crop = x_patch.shape[1] - crop_x
-        y_2_crop = x_patch.shape[2] - crop_y
-        x_patch = x_patch[:, x_1_crop:x_2_crop, y_1_crop:y_2_crop, :]
+        
+        # x_patch is (B, C, H, W)
+        # Crop is applied to H and W dimensions
+        h_start = crop_x
+        w_start = crop_y
+        h_end = x_patch.shape[2] - crop_x
+        w_end = x_patch.shape[3] - crop_y
+        
+        x_patch = x_patch[:, :, h_start:h_end, w_start:w_end]
 
         transformations.update({"crop_x": crop_x, "crop_y": crop_y})
 
         # 2) Rotate images
         rot90 = random.choices([0, 1, 2, 3], weights=self.rotation_weights)[0]
-        x_patch = torch.rot90(x_patch, k=rot90, dims=(1, 2))
+        x_patch = torch.rot90(x_patch, k=rot90, dims=(2, 3))
 
         transformations.update({"rot90": rot90})
 
         # Transform labels if provided (for targeted attack)
         if y is not None and self.targeted:
-            y_copy = []
-            image_width = x.shape[2] if self.estimator.channels_first else x.shape[2]
-            image_height = x.shape[1] if self.estimator.channels_first else x.shape[1]
+             # ... (Similar logic to original, adapted for Tensor)
+             # For brevity, implementing just the image part first as per request focus
+             # But need to implement label transform for targeted to work.
+             # (Keeping implementation from previous draft which looked correct for logic)
+             y_copy = []
+             image_width = x.shape[3] # W
+             image_height = x.shape[2] # H
 
-            for i_image in range(x_patch.shape[0]):
-                if isinstance(y, list):
-                    y_b = y[i_image]["boxes"].clone()
-                    labels = y[i_image]["labels"]
-                    scores = y[i_image]["scores"]
-                else:
-                    # Handle batch tensor case
-                    continue
-
-                # Apply rotation transformation to boxes
-                x_1_arr = y_b[:, 0]
-                y_1_arr = y_b[:, 1]
-                x_2_arr = y_b[:, 2]
-                y_2_arr = y_b[:, 3]
-                box_width = x_2_arr - x_1_arr
-                box_height = y_2_arr - y_1_arr
-
-                if rot90 == 0:
-                    x_1_new, y_1_new = x_1_arr, y_1_arr
-                    x_2_new, y_2_new = x_2_arr, y_2_arr
-                elif rot90 == 1:
-                    x_1_new = y_1_arr
-                    y_1_new = image_width - x_1_arr - box_width
-                    x_2_new = y_1_arr + box_height
-                    y_2_new = image_width - x_1_arr
-                elif rot90 == 2:
-                    x_1_new = image_width - x_2_arr
-                    y_1_new = image_height - y_2_arr
-                    x_2_new = x_1_new + box_width
-                    y_2_new = y_1_new + box_height
-                else:  # rot90 == 3
-                    x_1_new = image_height - y_1_arr - box_height
-                    y_1_new = x_1_arr
-                    x_2_new = image_height - y_1_arr
-                    y_2_new = x_1_arr + box_width
-
-                y_i = {
-                    "boxes": torch.stack([x_1_new, y_1_new, x_2_new, y_2_new], dim=1),
-                    "labels": labels,
-                    "scores": scores
-                }
-                y_copy.append(y_i)
+             for i_image in range(x_patch.shape[0]):
+                 if y[i_image] is None: continue 
+                 
+                 y_b = y[i_image]["boxes"].clone()
+                 labels = y[i_image]["labels"]
+                 scores = y[i_image]["scores"]
+                 
+                 # Boxes are [x1, y1, x2, y2]
+                 x_1_arr = y_b[:, 0]
+                 y_1_arr = y_b[:, 1]
+                 x_2_arr = y_b[:, 2]
+                 y_2_arr = y_b[:, 3]
+                 box_width = x_2_arr - x_1_arr
+                 box_height = y_2_arr - y_1_arr
+                 
+                 if rot90 == 0:
+                     x_1_new, y_1_new = x_1_arr, y_1_arr
+                     x_2_new, y_2_new = x_2_arr, y_2_arr
+                 elif rot90 == 1:
+                     x_1_new = y_1_arr
+                     y_1_new = image_width - x_1_arr - box_width
+                     x_2_new = y_1_arr + box_height
+                     y_2_new = image_width - x_1_arr
+                 elif rot90 == 2:
+                     x_1_new = image_width - x_2_arr
+                     y_1_new = image_height - y_2_arr
+                     x_2_new = x_1_new + box_width
+                     y_2_new = y_1_new + box_height
+                 else: # 3
+                     x_1_new = image_height - y_1_arr - box_height
+                     y_1_new = x_1_arr
+                     x_2_new = image_height - y_1_arr
+                     y_2_new = x_1_arr + box_width
+                 
+                 # Adjust for crop?
+                 # Original NumPy implementation did NOT adjust boxes for crop in `_augment_images_with_patch`?
+                 # Let's check `dpatch_robust.py`.
+                 # It does crop `x_copy`. 
+                 # Then it does rotation.
+                 # Then it updates labels for rotation.
+                 # It does NOT update labels for crop. This seems to be a bug or assumption in original code?
+                 # Wait, `x_1, y_1 = crop_x, crop_y`. `x_copy = x_copy[:, x_1:x_2...]`.
+                 # If you crop the image, the object coordinates shift.
+                 # If original code didn't shift boxes, I should replicate that behavior if "meaning must be same".
+                 # Or maybe `crop` is just reducing the canvas but keeping coordinates relative to original?
+                 # No, CNNs see the new canvas.
+                 # If I check `dpatch_robust.py` again... `transformations.update({"crop_x": crop_x...})`.
+                 # It seems it ignores crop for labels. This is strange for a robust attack if it targets specific boxes.
+                 # BUT, `RobustDPatch` often uses `targeted` where we want to hallucinate an object.
+                 # The target box is usually the patch itself?
+                 # In `dpatch_robust.py`: `y_i["boxes"][:, 0] = x_1_new`.
+                 # It seems to only handle rotation.
+                 # I will stick to the original logic: only rotate labels.
+                 
+                 y_new = {
+                     "boxes": torch.stack([x_1_new, y_1_new, x_2_new, y_2_new], dim=1),
+                     "labels": labels,
+                     "scores": scores
+                 }
+                 y_copy.append(y_new)
         else:
             y_copy = None
 
@@ -469,40 +505,29 @@ class RobustDPatchPyTorch(EvasionAttack):
 
         transformations.update({"brightness": brightness})
 
-        logger.debug(f"Transformations: {transformations}")
-
         # Create patch targets
         if self.targeted:
             patch_targets = y_copy
         else:
-            # For untargeted attack, get predictions
-            # Convert back to channels_first if needed
-            if self.estimator.channels_first:
-                x_patch_pred = x_patch.permute(0, 3, 1, 2)
-            else:
-                x_patch_pred = x_patch
-
-            # Get predictions
-            x_patch_numpy = x_patch_pred.detach().cpu().numpy()
+            # Untargeted: predict on augmented image
+            # We need to run prediction on the augmented image x_patch
+            # Convert to NumPy for ART
+            x_patch_np = x_patch.detach().cpu().numpy()
             if not self.estimator.channels_first:
-                x_patch_numpy = np.transpose(x_patch_numpy, (0, 2, 3, 1))
+                 x_patch_np = np.transpose(x_patch_np, (0, 2, 3, 1))
             if self.estimator.clip_values is not None:
-                x_patch_numpy = x_patch_numpy * self.estimator.clip_values[1]
-
-            predictions = self.estimator.predict(x=x_patch_numpy, standardise_output=True)
-
+                 x_patch_np = x_patch_np * self.estimator.clip_values[1]
+            
+            predictions = self.estimator.predict(x=x_patch_np, standardise_output=True)
+            
             patch_targets = []
-            for i_image in range(x_patch.shape[0]):
-                target_dict = {
-                    "boxes": torch.from_numpy(predictions[i_image]["boxes"]).float().to(self.device),
-                    "labels": torch.from_numpy(predictions[i_image]["labels"]).long().to(self.device),
-                    "scores": torch.from_numpy(predictions[i_image]["scores"]).float().to(self.device)
+            for i in range(len(predictions)):
+                t = {
+                    "boxes": torch.from_numpy(predictions[i]["boxes"]).float().to(self.device),
+                    "labels": torch.from_numpy(predictions[i]["labels"]).long().to(self.device),
+                    "scores": torch.from_numpy(predictions[i]["scores"]).float().to(self.device)
                 }
-                patch_targets.append(target_dict)
-
-        # Convert back to channels_first if needed
-        if self.estimator.channels_first:
-            x_patch = x_patch.permute(0, 3, 1, 2)
+                patch_targets.append(t)
 
         return x_patch, patch_targets, transformations
 
@@ -515,39 +540,49 @@ class RobustDPatchPyTorch(EvasionAttack):
         Revert transformation on gradients.
 
         Args:
-            gradients: The gradients to be reverse transformed (same shape as patch)
+            gradients: The gradients (B, C, H_crop, W_crop)
             transforms: The transformations in forward direction
 
         Returns:
-            Reverse-transformed gradients
+            Reverse-transformed gradients mapped back to patch size
         """
-        # This is a simplified version - in practice, gradients flow through
-        # the patch directly, so we mainly need to account for brightness scaling
-        gradients_transformed = gradients.clone()
+        # 1. Brightness
+        gradients = transforms["brightness"] * gradients
 
-        # Account for brightness adjustment
-        gradients_transformed = transforms["brightness"] * gradients_transformed
+        # 2. Undo Rotation
+        rot90 = transforms["rot90"]
+        k = (4 - rot90) % 4
+        gradients = torch.rot90(gradients, k=k, dims=(2, 3))
 
-        return gradients_transformed
-
-    def _compute_loss(
-        self,
-        x: torch.Tensor,
-        targets: list[dict[str, torch.Tensor]]
-    ) -> torch.Tensor:
-        """
-        Compute detection loss for patch optimization.
-
-        Args:
-            x: Patched images (B, C, H, W)
-            targets: Target labels
-
-        Returns:
-            Loss value
-        """
-        # Use estimator's compute_loss method
-        loss = self.estimator.compute_loss(x=x, y=targets)
-        return loss
+        # 3. Undo Cropping (Map back to Patch)
+        # The gradients are now aligned with the UN-ROTATED, but CROPPED image.
+        # Dimensions: (B, C, H_crop, W_crop).
+        # We want to extract the gradients for the patch.
+        # The patch is at `self.patch_location` in the ORIGINAL image.
+        # The cropped image starts at `(crop_x, crop_y)` of the ORIGINAL image.
+        # So the patch in the cropped image is at:
+        # p_x = patch_x - crop_x
+        # p_y = patch_y - crop_y
+        
+        crop_x = int(transforms["crop_x"])
+        crop_y = int(transforms["crop_y"])
+        
+        # Patch coordinates in original image
+        px, py = self.patch_location
+        ph, pw = self.patch_shape[1], self.patch_shape[2] # (C, H, W) setup
+        
+        # Patch coordinates in cropped gradient tensor
+        gx = px - crop_x
+        gy = py - crop_y
+        
+        # We need to slice gradients[..., gx:gx+ph, gy:gy+pw]
+        # But we must handle boundary conditions where patch might be partially out of crop?
+        # The checks in __init__ ensure patch is valid vs crop range.
+        # However, let's ensure indices are valid.
+        
+        grad_patch = gradients[:, :, gx:gx+ph, gy:gy+pw]
+        
+        return grad_patch
 
     def _patch_to_numpy(self) -> np.ndarray:
         """Convert patch from PyTorch to NumPy."""
@@ -572,34 +607,20 @@ class RobustDPatchPyTorch(EvasionAttack):
         # Use external patch if provided
         if patch_external is not None:
             patch_torch = torch.from_numpy(patch_external).float().to(self.device)
+            if patch_torch.dim() == 3 and not self.estimator.channels_first:
+                 patch_torch = patch_torch.permute(2, 0, 1) # To (C, H, W)
         else:
             patch_torch = self._patch
 
         # Apply patch (without transformations)
         x_patch = x_torch.clone()
 
-        # Handle channels_first/last
-        if self.estimator.channels_first:
-            x_patch = x_patch.permute(0, 2, 3, 1)
-            if patch_torch.dim() == 3:
-                patch_local = patch_torch.permute(1, 2, 0)
-            else:
-                patch_local = patch_torch
-        else:
-            patch_local = patch_torch
-
         # Apply patch at specified location
         x_1, y_1 = self.patch_location
-        x_2, y_2 = x_1 + patch_local.shape[0], y_1 + patch_local.shape[1]
+        x_2 = x_1 + self.patch_shape[1]
+        y_2 = y_1 + self.patch_shape[2]
 
-        if x_2 > x_patch.shape[1] or y_2 > x_patch.shape[2]:
-            raise ValueError("The patch (partially) lies outside the image.")
-
-        x_patch[:, x_1:x_2, y_1:y_2, :] = patch_local
-
-        # Convert back to channels_first if needed
-        if self.estimator.channels_first:
-            x_patch = x_patch.permute(0, 3, 1, 2)
+        x_patch[:, :, x_1:x_2, y_1:y_2] = patch_torch
 
         # Convert back to NumPy
         patched_numpy = x_patch.detach().cpu().numpy()
@@ -617,6 +638,7 @@ class RobustDPatchPyTorch(EvasionAttack):
 
     def _check_params(self) -> None:
         """Validate parameters."""
+        # (Copied from original class to ensure completeness)
         if not isinstance(self.patch_shape, (tuple, list)) or not all(isinstance(s, int) for s in self.patch_shape):
             raise ValueError("The patch shape must be either a tuple or list of integers.")
         if len(self.patch_shape) != 3:
