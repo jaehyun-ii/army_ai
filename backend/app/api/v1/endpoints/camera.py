@@ -238,6 +238,14 @@ async def stream_camera(
                 logger.error(f"No active capture for run {run_id_str}")
                 return
 
+            # Initialize FPS tracking
+            frame_count = 0
+            start_time = time.time()
+            fps_update_interval = 1.0  # Update FPS every second
+            last_fps_update = start_time
+            total_detections = 0
+            inference_times = []
+
             while global_camera.is_active:
                 try:
                     ret, frame = cap.read()
@@ -245,8 +253,28 @@ async def stream_camera(
                         time.sleep(0.01)
                         continue
 
+                    frame_count += 1
+                    current_time = time.time()
+
+                    # Update FPS statistics periodically
+                    if current_time - last_fps_update >= fps_update_interval:
+                        elapsed = current_time - start_time
+                        current_fps = frame_count / elapsed if elapsed > 0 else 0
+                        avg_inference_time = sum(inference_times) / len(inference_times) if inference_times else 0
+
+                        # Update session stats for SSE stream
+                        realtime_service.session_stats[run_id_str] = {
+                            "fps": round(current_fps, 1),
+                            "total_frames": frame_count,
+                            "total_detections": total_detections,
+                            "avg_inference_time": round(avg_inference_time, 2),
+                            "timestamp": current_time
+                        }
+                        last_fps_update = current_time
+
                     if draw_boxes and global_camera.estimator_id:
                         try:
+                            inference_start = time.time()
                             result = executor.submit(
                                 run_inference_sync,
                                 frame,
@@ -254,12 +282,32 @@ async def stream_camera(
                                 0.25,
                                 0.45
                             ).result()
+                            inference_time = (time.time() - inference_start) * 1000  # Convert to ms
 
                             h, w = frame.shape[:2]
                             num_detections = len(result.detections) if result.detections else 0
 
+                            # Track statistics
+                            total_detections += num_detections
+                            inference_times.append(inference_time)
+                            # Keep only last 30 inference times for average
+                            if len(inference_times) > 30:
+                                inference_times.pop(0)
+
                             if num_detections > 0:
                                 logger.info(f"Drawing {num_detections} detections on frame (h={h}, w={w})")
+
+                            # Generate distinct colors for each class
+                            def get_class_color(class_id: int):
+                                """Generate a distinct color for each class using HSV color space."""
+                                import numpy as np
+                                # Use golden ratio for better color distribution
+                                golden_ratio = 0.618033988749895
+                                hue = (class_id * golden_ratio) % 1.0
+                                # Convert HSV to BGR for OpenCV
+                                hsv = np.array([[[int(hue * 180), 200, 255]]], dtype=np.uint8)
+                                bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
+                                return tuple(map(int, bgr))
 
                             for det in result.detections:
                                 # Bounding boxes are normalized (0-1); convert to pixel coordinates for overlay
@@ -270,9 +318,28 @@ async def stream_camera(
 
                                 logger.info(f"Drawing box: ({x1}, {y1}) to ({x2}, {y2}) - {det.class_name} {det.confidence:.2f}")
 
-                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                # Get color for this class
+                                color = get_class_color(det.class_id)
+
+                                # Draw bounding box with class-specific color
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                                # Prepare label text
                                 label = f'{det.class_name} {det.confidence:.2f}'
-                                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                                # Get text size for background box
+                                font = cv2.FONT_HERSHEY_SIMPLEX
+                                font_scale = 0.6
+                                font_thickness = 2
+                                (text_width, text_height), baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
+
+                                # Draw filled rectangle background for label
+                                label_y1 = max(y1 - text_height - baseline - 8, 0)
+                                label_y2 = y1
+                                cv2.rectangle(frame, (x1, label_y1), (x1 + text_width + 8, label_y2), color, -1)
+
+                                # Draw white text on colored background
+                                cv2.putText(frame, label, (x1 + 4, y1 - baseline - 4), font, font_scale, (255, 255, 255), font_thickness)
 
                         except Exception as e:
                             logger.error(f"Detection error on frame: {e}", exc_info=True)
@@ -545,7 +612,20 @@ async def start_capture_session(db: AsyncSession = Depends(get_db)):
 
         captured_frames = []
         start_time = asyncio.get_event_loop().time()
-        seq_no = 1
+
+        # Get the max seq_no for this run_id to avoid UNIQUE constraint violation
+        from sqlalchemy import select, func
+        from app.models.realtime import RTFrame
+
+        max_seq_result = await db.execute(
+            select(func.max(RTFrame.seq_no))
+            .where(RTFrame.run_id == global_camera.run_id)
+            .where(RTFrame.deleted_at.is_(None))
+        )
+        max_seq = max_seq_result.scalar()
+        seq_no = (max_seq or 0) + 1  # Start from next available seq_no
+
+        logger.info(f"Starting capture from seq_no {seq_no} (max existing: {max_seq})")
 
         # Capture frames for specified duration
         while (asyncio.get_event_loop().time() - start_time) < capture_duration:
@@ -664,40 +744,37 @@ async def start_capture_session(db: AsyncSession = Depends(get_db)):
 
                 await asyncio.sleep(frame_interval)
 
-        logger.info(f"Captured {len(captured_frames)} frames for run {global_camera.run_id}")
+        logger.info(f"Captured {len(captured_frames)} new frames for run {global_camera.run_id}")
 
-        # Update capture run with actual frame count and status
+        # Get total frame count for this run (including previous captures)
+        total_frames_result = await db.execute(
+            select(func.count(RTFrame.id))
+            .where(RTFrame.run_id == global_camera.run_id)
+            .where(RTFrame.deleted_at.is_(None))
+        )
+        total_frames = total_frames_result.scalar() or 0
+
+        # Update capture run with actual frame count
         from app.models.realtime import RTRunStatus
         from sqlalchemy import update as sql_update
 
-        # IMPORTANT: Update frames_expected FIRST before marking as completed
-        # Database constraint requires frames_expected to match stored_frames when status=completed
+        # IMPORTANT: Update frames_expected to match total stored frames
+        # Note: We don't mark as "completed" because this is an ongoing capture session
         await db.execute(
             sql_update(crud.rt_capture_run.model)
             .where(crud.rt_capture_run.model.id == global_camera.run_id)
-            .values(frames_expected=len(captured_frames))
-        )
-        await db.flush()
-
-        # Now safe to mark as completed
-        run_obj = await crud.rt_capture_run.get(db, id=global_camera.run_id)
-        await crud.rt_capture_run.update(
-            db,
-            db_obj=run_obj,
-            obj_in=schemas.RTCaptureRunUpdate(
-                status=RTRunStatus.COMPLETED,
-                ended_at=datetime.now(timezone.utc)
-            )
+            .values(frames_expected=total_frames)
         )
 
         await db.commit()
-        logger.info(f"Updated capture run {global_camera.run_id}: status=completed, frames={len(captured_frames)}")
+        logger.info(f"Updated capture run {global_camera.run_id}: total_frames={total_frames}, new_frames={len(captured_frames)}")
 
         return {
             "status": "completed",
-            "message": f"Successfully captured {len(captured_frames)} frames",
+            "message": f"Successfully captured {len(captured_frames)} new frames (total: {total_frames})",
             "run_id": str(global_camera.run_id),
             "frames_captured": len(captured_frames),
+            "total_frames": total_frames,
             "duration_seconds": capture_duration
         }
 
@@ -723,13 +800,16 @@ async def list_captures(
         from app.models.realtime import RTCaptureRun, RTFrame
 
         # Query capture runs with frame counts
+        # Only show runs that have actual captured frames (exclude streaming-only sessions)
         query = (
             select(
                 RTCaptureRun,
                 func.count(RTFrame.id).label('frame_count')
             )
             .outerjoin(RTFrame, RTCaptureRun.id == RTFrame.run_id)
+            .where(RTFrame.deleted_at.is_(None))
             .group_by(RTCaptureRun.id)
+            .having(func.count(RTFrame.id) > 0)  # Only show runs with frames
             .order_by(RTCaptureRun.created_at.desc())
             .offset(skip)
             .limit(limit)

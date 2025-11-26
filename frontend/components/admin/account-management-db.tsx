@@ -65,144 +65,156 @@ export function AccountManagementDB() {
   const [roleFilter, setRoleFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [selectedUsers, setSelectedUsers] = useState<string[]>([])
-  const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
-
-  // 새 사용자 생성 폼 상태
-  const [newUser, setNewUser] = useState({
-    username: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    role: 'user'
-  })
-  const [passwordErrors, setPasswordErrors] = useState<string[]>([])
-  const [showPasswordHelp, setShowPasswordHelp] = useState(false)
-
-  // 사용자 목록 가져오기
-  const fetchUsers = useCallback(async () => {
-    try {
-      setLoading(true)
-      const token = localStorage.getItem('token')
-      const response = await fetch('/api/users', {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      const [showCreateDialog, setShowCreateDialog] = useState(false)
+    const [createAccountMessage, setCreateAccountMessage] = useState<{ type: 'success' | 'error' | null, message: string | null }>({ type: null, message: null })
+    const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  
+    // 새 사용자 생성 폼 상태
+    const [newUser, setNewUser] = useState({
+      username: '',
+      email: '',
+      password: '',
+      confirmPassword: '',
+      role: 'user'
+    })
+    const [passwordErrors, setPasswordErrors] = useState<string[]>([])
+    const [passwordValidationStatus, setPasswordValidationStatus] = useState<{ type: 'success' | 'error' | null, message: string | null }>({ type: null, message: null })
+    const [showPasswordHelp, setShowPasswordHelp] = useState(false)
+  
+    // 사용자 목록 가져오기
+    const fetchUsers = useCallback(async () => {
+      try {
+        setLoading(true)
+        const token = localStorage.getItem('token')
+        const response = await await fetch('/api/users', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+        if (response.ok) {
+          const data = await response.json()
+          // Transform backend response to match frontend interface (camelCase)
+          const transformedUsers = data.map((user: any) => ({
+            id: user.id,
+            username: user.username,
+            email: user.email || '',
+            role: user.role,
+            isActive: user.is_active,
+            createdAt: user.created_at,
+            updatedAt: user.updated_at
+          }))
+          setUsers(transformedUsers)
         }
-      })
-      if (response.ok) {
-        const data = await response.json()
-        // Transform backend response to match frontend interface (camelCase)
-        const transformedUsers = data.map((user: any) => ({
-          id: user.id,
-          username: user.username,
-          email: user.email || '',
-          role: user.role,
-          isActive: user.is_active,
-          createdAt: user.created_at,
-          updatedAt: user.updated_at
-        }))
-        setUsers(transformedUsers)
+      } catch (error) {
+        console.error('Error fetching users:', error)
+      } finally {
+        setLoading(false)
       }
-    } catch (error) {
-      console.error('Error fetching users:', error)
-    } finally {
-      setLoading(false)
+    }, [])
+  
+    useEffect(() => {
+      fetchUsers()
+    }, [fetchUsers])
+  
+    // 계정 통계 계산
+    const getAccountStats = (): AccountStats => {
+      return {
+        totalUsers: users.length,
+        activeUsers: users.filter(u => u.isActive).length,
+        inactiveUsers: users.filter(u => !u.isActive).length,
+        adminUsers: users.filter(u => u.role === 'admin').length,
+        regularUsers: users.filter(u => u.role === 'user').length
+      }
     }
-  }, [])
-
-  useEffect(() => {
-    fetchUsers()
-  }, [fetchUsers])
-
-  // 계정 통계 계산
-  const getAccountStats = (): AccountStats => {
-    return {
-      totalUsers: users.length,
-      activeUsers: users.filter(u => u.isActive).length,
-      inactiveUsers: users.filter(u => !u.isActive).length,
-      adminUsers: users.filter(u => u.role === 'admin').length,
-      regularUsers: users.filter(u => u.role === 'user').length
-    }
-  }
-
-  // 사용자 필터링
-  const filteredUsers = users.filter(user => {
-    const matchesSearch =
-      user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (user.email && user.email.toLowerCase().includes(searchTerm.toLowerCase()))
-
-    const matchesRole = roleFilter === 'all' || user.role.toLowerCase() === roleFilter.toLowerCase()
-    const matchesStatus = statusFilter === 'all' || (statusFilter === 'active' ? user.isActive : !user.isActive)
-
-    return matchesSearch && matchesRole && matchesStatus
-  })
-
-  // 비밀번호 변경 시 유효성 검사
-  const handlePasswordChange = (password: string) => {
-    setNewUser({...newUser, password})
-    const validation = validatePassword(password, newUser.username)
-    setPasswordErrors(validation.errors)
-  }
-
-  // 사용자 생성
-  const handleCreateUser = async () => {
-    if (!newUser.username || !newUser.password) {
-      alert('사용자 ID와 비밀번호는 필수 항목입니다.')
-      return
-    }
-
-    if (newUser.password !== newUser.confirmPassword) {
-      alert('비밀번호가 일치하지 않습니다.')
-      return
-    }
-
-    // Client-side password validation
-    const validation = validatePassword(newUser.password, newUser.username)
-    if (!validation.isValid) {
-      alert(`비밀번호 정책 위반:\n${validation.errors.join('\n')}`)
-      return
-    }
-
-    try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: newUser.username,
-          email: newUser.email || undefined, // Email is optional
-          password: newUser.password,
-          role: newUser.role
-        })
-      })
-
-      const result = await response.json()
-
-      if (response.ok) {
-        setNewUser({
-          username: '',
-          email: '',
-          password: '',
-          confirmPassword: '',
-          role: 'user'
-        })
-        setPasswordErrors([])
-        setShowCreateDialog(false)
-        await fetchUsers()
-        alert('사용자 계정이 성공적으로 생성되었습니다.')
+  
+    // 사용자 필터링
+    const filteredUsers = users.filter(user => {
+      const matchesSearch =
+        user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (user.email && user.email.toLowerCase().includes(searchTerm.toLowerCase()))
+  
+      const matchesRole = roleFilter === 'all' || user.role.toLowerCase() === roleFilter.toLowerCase()
+      const matchesStatus = statusFilter === 'all' || (statusFilter === 'active' ? user.isActive : !user.isActive)
+  
+      return matchesSearch && matchesRole && matchesStatus
+    })
+  
+    // 비밀번호 변경 시 유효성 검사
+    const handlePasswordChange = (password: string) => {
+      setNewUser({...newUser, password})
+      const validation = validatePassword(password, newUser.username)
+      setPasswordErrors(validation.errors)
+  
+      if (password.length > 0) { // Only show status if password is being entered
+        if (validation.isValid) {
+          setPasswordValidationStatus({ type: 'success', message: '비밀번호 정책을 충족합니다.' });
+        } else {
+          setPasswordValidationStatus({ type: 'error', message: `비밀번호 정책을 충족하지 않습니다.` });
+        }
       } else {
-        alert(result.detail || '계정 생성에 실패했습니다.')
+        setPasswordValidationStatus({ type: null, message: null });
       }
-    } catch (error) {
-      console.error('Error creating user:', error)
-      alert('계정 생성 중 오류가 발생했습니다.')
     }
-  }
-
-  // 사용자 삭제
-  const handleDeleteUsers = async () => {
-    if (selectedUsers.length === 0) {
+  
+    // 사용자 생성
+    const handleCreateUser = async () => {
+      if (!newUser.username || !newUser.password) {
+        setCreateAccountMessage({ type: 'error', message: '사용자 ID와 비밀번호는 필수 항목입니다.' })
+        return
+      }
+  
+      if (newUser.password !== newUser.confirmPassword) {
+        setCreateAccountMessage({ type: 'error', message: '비밀번호가 일치하지 않습니다.' })
+        return
+      }
+  
+      // Client-side password validation
+      const validation = validatePassword(newUser.password, newUser.username)
+      if (!validation.isValid) {
+        setCreateAccountMessage({ type: 'error', message: `비밀번호 정책 위반: ${validation.errors.join(', ')}` })
+        return
+      }
+  
+      try {
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            username: newUser.username,
+            email: newUser.email || undefined, // Email is optional
+            password: newUser.password,
+            role: newUser.role
+          })
+        })
+  
+        const result = await response.json()
+  
+        if (response.ok) {
+          setNewUser({
+            username: '',
+            email: '',
+            password: '',
+            confirmPassword: '',
+            role: 'user'
+          })
+          setPasswordErrors([])
+          setPasswordValidationStatus({ type: null, message: null }) // Clear password validation status
+          setShowCreateDialog(false)
+          await fetchUsers()
+          setCreateAccountMessage({ type: 'success', message: '사용자 계정이 성공적으로 생성되었습니다.' })
+        } else {
+          setCreateAccountMessage({ type: 'error', message: result.detail || '계정 생성에 실패했습니다.' })
+        }
+      } catch (error) {
+        console.error('Error creating user:', error)
+        setCreateAccountMessage({ type: 'error', message: '계정 생성 중 오류가 발생했습니다.' })
+      }
+    }
+  
+    // 사용자 삭제
+    const handleDeleteUsers = async () => {    if (selectedUsers.length === 0) {
       alert('삭제할 사용자를 선택해주세요.')
       return
     }
@@ -422,7 +434,21 @@ export function AccountManagementDB() {
 
               {/* 액션 버튼 */}
               <div className="flex gap-2">
-                <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+                <Dialog open={showCreateDialog} onOpenChange={(open) => {
+                  setShowCreateDialog(open)
+                  if (!open) { // Reset form and messages when dialog is closed
+                    setNewUser({
+                      username: '',
+                      email: '',
+                      password: '',
+                      confirmPassword: '',
+                      role: 'user'
+                    })
+                    setPasswordErrors([])
+                    setPasswordValidationStatus({ type: null, message: null })
+                    setCreateAccountMessage({ type: null, message: null })
+                  }
+                }}>
                   <DialogTrigger asChild>
                     <Button className="bg-green-600 hover:bg-green-700">
                       <UserPlus className="w-4 h-4 mr-2" />
@@ -436,6 +462,14 @@ export function AccountManagementDB() {
                         새로운 사용자 계정을 생성합니다
                       </DialogDescription>
                     </DialogHeader>
+                    {createAccountMessage.message && (
+                      <Alert className={createAccountMessage.type === 'error' ? "bg-red-900/20 border-red-500/30" : "bg-green-900/20 border-green-500/30"}>
+                        {createAccountMessage.type === 'error' ? <AlertCircle className="h-4 w-4 text-red-400" /> : <Check className="h-4 w-4 text-green-400" />}
+                        <AlertDescription className={createAccountMessage.type === 'error' ? "text-red-300" : "text-green-300"}>
+                          {createAccountMessage.message}
+                        </AlertDescription>
+                      </Alert>
+                    )}
                     <div className="space-y-4">
                       <div>
                         <Label className="text-white">사용자 ID *</Label>
@@ -466,35 +500,35 @@ export function AccountManagementDB() {
                           className="bg-slate-700/50 border-white/10 text-white"
                           placeholder="9자 이상, 숫자+문자+특수문자"
                         />
+                        {passwordValidationStatus.message && (
+                          <Alert className={`mt-2 ${passwordValidationStatus.type === 'error' ? "bg-red-900/20 border-red-500/30" : "bg-green-900/20 border-green-500/30"}`}>
+                            {passwordValidationStatus.type === 'error' ? <AlertCircle className="h-4 w-4 text-red-400" /> : <Check className="h-4 w-4 text-green-400" />}
+                            <AlertDescription className={passwordValidationStatus.type === 'error' ? "text-red-300" : "text-green-300"}>
+                              {passwordValidationStatus.message}
+                            </AlertDescription>
+                          </Alert>
+                        )}
                         {showPasswordHelp && (
                           <div className="mt-2 p-3 bg-slate-700/30 rounded-md border border-white/10">
                             <p className="text-xs text-slate-300 font-semibold mb-2">비밀번호 정책:</p>
                             <ul className="space-y-1 text-xs">
-                              <li className={`flex items-center gap-2 ${newUser.password.length >= 9 && /\d/.test(newUser.password) && /[a-zA-Z]/.test(newUser.password) && /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/~`]/.test(newUser.password) ? 'text-green-400' : 'text-slate-400'}`}>
-                                {newUser.password.length >= 9 && /\d/.test(newUser.password) && /[a-zA-Z]/.test(newUser.password) && /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/~`]/.test(newUser.password) ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                              <li className={`flex items-center gap-2 ${!passwordErrors.some(e => e.includes('9자리')) && newUser.password.length > 0 ? 'text-green-400' : 'text-slate-400'}`}>
+                                {!passwordErrors.some(e => e.includes('9자리')) && newUser.password.length > 0 ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
                                 숫자, 문자, 특수문자 포함 9자리 이상
                               </li>
-                              <li className={`flex items-center gap-2 ${passwordErrors.some(e => e.includes('ID')) ? 'text-red-400' : 'text-slate-400'}`}>
-                                {passwordErrors.some(e => e.includes('ID')) ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                              <li className={`flex items-center gap-2 ${!passwordErrors.some(e => e.includes('ID')) && newUser.password.length > 0 ? 'text-green-400' : 'text-slate-400'}`}>
+                                {!passwordErrors.some(e => e.includes('ID')) && newUser.password.length > 0 ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
                                 사용자 ID와 다르게 설정
                               </li>
-                              <li className={`flex items-center gap-2 ${passwordErrors.some(e => e.includes('연속')) ? 'text-red-400' : 'text-slate-400'}`}>
-                                {passwordErrors.some(e => e.includes('연속')) ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                              <li className={`flex items-center gap-2 ${!passwordErrors.some(e => e.includes('연속')) && newUser.password.length > 0 ? 'text-green-400' : 'text-slate-400'}`}>
+                                {!passwordErrors.some(e => e.includes('연속')) && newUser.password.length > 0 ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
                                 동일 문자 3회 이상 반복 금지
                               </li>
-                              <li className={`flex items-center gap-2 ${passwordErrors.some(e => e.includes('오름') || e.includes('내림')) ? 'text-red-400' : 'text-slate-400'}`}>
-                                {passwordErrors.some(e => e.includes('오름') || e.includes('내림')) ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                              <li className={`flex items-center gap-2 ${!passwordErrors.some(e => e.includes('오름') || e.includes('내림')) && newUser.password.length > 0 ? 'text-green-400' : 'text-slate-400'}`}>
+                                {!passwordErrors.some(e => e.includes('오름') || e.includes('내림')) && newUser.password.length > 0 ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
                                 연속 오름차순/내림차순 금지
                               </li>
                             </ul>
-                            {passwordErrors.length > 0 && (
-                              <Alert className="mt-2 bg-red-900/20 border-red-500/30">
-                                <AlertCircle className="h-4 w-4 text-red-400" />
-                                <AlertDescription className="text-red-300 text-xs">
-                                  {passwordErrors[0]}
-                                </AlertDescription>
-                              </Alert>
-                            )}
                           </div>
                         )}
                       </div>

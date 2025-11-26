@@ -160,6 +160,13 @@ export function RealTimeCamera() {
     }
 
     setIsCapturing(true)
+
+    // Show capture start message
+    toast({
+      title: "캡처 시작",
+      description: "5초간 10장의 프레임을 캡처합니다..."
+    })
+
     try {
       const response = await fetch('/api/camera/capture/start', {
         method: 'POST',
@@ -178,11 +185,13 @@ export function RealTimeCamera() {
         throw new Error(errorMessage)
       }
 
+      const result = await response.json()
+
       await new Promise(resolve => setTimeout(resolve, 6000))
 
       toast({
         title: "캡처 완료",
-        description: "5초간의 캡처가 성공적으로 완료되었습니다."
+        description: `${result.frames_captured || 10}장의 프레임을 새로 캡처했습니다. (총 ${result.total_frames || result.frames_captured || 10}장)`
       })
     } catch (error) {
       console.error('Capture failed:', error)

@@ -795,7 +795,7 @@ export function AdversarialPatchGeneratorUpdated() {
                 </SelectItem>
               ))
             ) : (
-              <SelectItem value="yolov11n.pt">YOLO v11n (기본)</SelectItem>
+              <SelectItem value="no-model" disabled>등록된 모델이 없습니다</SelectItem>
             )}
           </SelectContent>
         </Select>

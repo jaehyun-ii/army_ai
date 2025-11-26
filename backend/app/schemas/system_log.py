@@ -1,10 +1,11 @@
 """
 System log schemas.
 """
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, Dict, Any
+from pydantic import BaseModel, ConfigDict, field_serializer
+from typing import Optional, Dict, Any, Union
 from datetime import datetime
 from uuid import UUID
+from ipaddress import IPv4Address, IPv6Address
 
 from app.models.system_log import LogLevel
 
@@ -43,7 +44,7 @@ class SystemLogResponse(SystemLogBase):
     timestamp: datetime
     user_id: Optional[UUID] = None
     username: Optional[str] = None
-    ip_address: Optional[str] = None
+    ip_address: Optional[Union[str, IPv4Address, IPv6Address]] = None
     user_agent: Optional[str] = None
     request_id: Optional[str] = None
     endpoint: Optional[str] = None
@@ -56,6 +57,13 @@ class SystemLogResponse(SystemLogBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer('ip_address')
+    def serialize_ip_address(self, ip: Optional[Union[str, IPv4Address, IPv6Address]]) -> Optional[str]:
+        """Convert IPv4Address/IPv6Address to string."""
+        if ip is None:
+            return None
+        return str(ip)
 
 
 class SystemLogFilter(BaseModel):

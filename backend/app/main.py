@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.api.v1.router import api_router
 from app.core.logging import setup_logging, get_logger
 from app.core.cache import cache_manager
+from app.core.middleware import SystemLoggingMiddleware
 
 # Setup logging
 setup_logging()
@@ -61,6 +62,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Add System Logging Middleware
+app.add_middleware(SystemLoggingMiddleware)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_PREFIX)

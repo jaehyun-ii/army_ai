@@ -382,14 +382,10 @@ export function CarlaAdversarialPatchGenerator() {
                           onValueChange={(value) => setConfig({ ...config, targetModel: value })}
                         >
                           <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
-                            <SelectValue placeholder="공격 대상 AI 모델 선택" />
+                            <SelectValue placeholder="모델 선택" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="yolov8">YOLOv8 (3D 객체 탐지)</SelectItem>
-                            <SelectItem value="pointnet">PointNet++ (3D 포인트 클라우드)</SelectItem>
-                            <SelectItem value="voxelnet">VoxelNet (3D 복셀)</SelectItem>
-                            <SelectItem value="centerpoint">CenterPoint (3D 탐지)</SelectItem>
-                            <SelectItem value="second">SECOND (3D 탐지)</SelectItem>
+                            <SelectItem value="no-model" disabled>등록된 모델이 없습니다</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>

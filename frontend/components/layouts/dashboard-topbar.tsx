@@ -1,11 +1,22 @@
 "use client"
 
 import { Button } from '@/components/ui/button'
-import { User, LogOut } from 'lucide-react'
+import { User, LogOut, Shield, UserCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { Badge } from '@/components/ui/badge'
 
 export function DashboardTopbar() {
   const { user, logout } = useAuth()
+
+  const getRoleDisplay = (role: string | undefined) => {
+    if (role === 'admin') {
+      return { label: '관리자', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' }
+    }
+    return { label: '사용자', color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' }
+  }
+
+  const roleInfo = getRoleDisplay(user?.role)
+  const isAdmin = user?.role === 'admin'
 
   return (
     <header className="flex-shrink-0 bg-slate-900/95 backdrop-blur-sm border-b border-white/10 z-40">
@@ -19,11 +30,18 @@ export function DashboardTopbar() {
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-slate-700 to-slate-600 rounded-full flex items-center justify-center ring-2 ring-white/20 shadow-md">
-                <User className="w-4 h-4 text-white" />
+              <div className={`w-8 h-8 ${isAdmin ? 'bg-gradient-to-br from-amber-600 to-amber-500' : 'bg-gradient-to-br from-slate-700 to-slate-600'} rounded-full flex items-center justify-center ring-2 ring-white/20 shadow-md`}>
+                {isAdmin ? (
+                  <Shield className="w-4 h-4 text-white" />
+                ) : (
+                  <UserCircle className="w-4 h-4 text-white" />
+                )}
               </div>
-              <div>
-                <p className="text-white text-sm font-semibold drop-shadow-sm">{user?.name || '사용자'}</p>
+              <div className="flex flex-col gap-0.5">
+                <p className="text-white text-sm font-semibold drop-shadow-sm leading-tight">{user?.username || 'Guest'}</p>
+                <Badge variant="outline" className={`text-[10px] ${roleInfo.color} border px-1.5 py-0 w-fit leading-tight`}>
+                  {roleInfo.label}
+                </Badge>
               </div>
             </div>
             <Button

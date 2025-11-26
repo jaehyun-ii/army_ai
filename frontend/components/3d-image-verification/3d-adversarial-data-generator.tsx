@@ -83,15 +83,10 @@ export function AdversarialDataGenerator3D() {
     { value: "patch_universal_v1", label: "Universal Attack Patch v1", successRate: 88.9, date: "2024-01-11" }
   ]
 
-  // AI 모델 목록
-  const targetModels = [
-    { value: "yolov8", label: "YOLO v8", type: "Object Detection" },
-    { value: "yolov5", label: "YOLO v5", type: "Object Detection" },
-    { value: "fasterrcnn", label: "Faster R-CNN", type: "Object Detection" },
-    { value: "ssd", label: "SSD MobileNet", type: "Object Detection" },
-    { value: "maskrcnn", label: "Mask R-CNN", type: "Instance Segmentation" },
-    { value: "detr", label: "DETR", type: "Object Detection" }
-  ]
+  // AI 모델 목록 (실제 등록된 모델만 표시)
+  // TODO: API에서 3D 모델 목록을 불러오도록 구현 필요
+  const targetModels: { value: string; label: string; type: string }[] = []
+  // 하드코딩된 목록 제거됨 - 실제 등록된 모델만 사용
 
   // 적대적 공격 실행
   const startAttack = () => {
@@ -317,17 +312,21 @@ export function AdversarialDataGenerator3D() {
                 </Label>
                 <Select value={config.targetModel} onValueChange={(value) => setConfig({ ...config, targetModel: value })}>
                   <SelectTrigger className="bg-slate-700/50 border-white/20 text-white mt-2">
-                    <SelectValue placeholder="공격할 모델 선택" />
+                    <SelectValue placeholder="모델 선택" />
                   </SelectTrigger>
                   <SelectContent className="bg-slate-800 border-white/20">
-                    {targetModels.map((model) => (
-                      <SelectItem key={model.value} value={model.value} className="text-white">
-                        <div className="flex flex-col">
-                          <span>{model.label}</span>
-                          <span className="text-xs text-slate-400">{model.type}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
+                    {targetModels.length > 0 ? (
+                      targetModels.map((model) => (
+                        <SelectItem key={model.value} value={model.value} className="text-white">
+                          <div className="flex flex-col">
+                            <span>{model.label}</span>
+                            <span className="text-xs text-slate-400">{model.type}</span>
+                          </div>
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="no-model" disabled className="text-slate-400">등록된 모델이 없습니다</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>

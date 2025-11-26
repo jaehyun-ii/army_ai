@@ -185,6 +185,7 @@ class Settings(BaseSettings):
                 "asyncio": "WARNING",
                 "PIL": "ERROR",
                 "urllib3": "ERROR",
+                "app.services.system_stats_service": "WARNING", # Suppress INFO/DEBUG for system stats
             }
         if isinstance(v, str):
             import json

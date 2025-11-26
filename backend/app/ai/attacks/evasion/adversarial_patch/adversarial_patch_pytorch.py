@@ -82,7 +82,7 @@ class AdversarialPatchPyTorch(EvasionAttack):
         batch_size: int = 16,
         patch_shape: tuple[int, int, int] = (3, 224, 224),
         patch_location: tuple[int, int] | None = None,
-        patch_type: str = "circle",
+        patch_type: str = "square",
         optimizer: str = "Adam",
         targeted: bool = True,
         summary_writer: str | bool | SummaryWriter = False,

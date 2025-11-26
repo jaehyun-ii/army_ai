@@ -6,13 +6,13 @@ export const dynamic = 'force-dynamic'
 
 const BACKEND_API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
 
-export async function GET(request: NextRequest) {
+export async function DELETE(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
     const queryString = searchParams.toString()
-    const url = `${BACKEND_API_URL}/api/v1/system-logs${queryString ? `?${queryString}` : ''}`
-    
-    console.log(`[/api/system-logs] Proxying GET request to ${url}`)
+    const url = `${BACKEND_API_URL}/api/v1/system-logs/cleanup${queryString ? `?${queryString}` : ''}`
+
+    console.log(`[/api/system-logs/cleanup] Proxying DELETE request to ${url}`)
 
     const cookieStore = cookies()
     const token = cookieStore.get('token')?.value || request.headers.get('authorization')?.replace('Bearer ', '')
@@ -26,14 +26,13 @@ export async function GET(request: NextRequest) {
     }
 
     const response = await fetch(url, {
-      method: 'GET',
+      method: 'DELETE',
       headers: headers,
-      cache: 'no-store'
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error(`[/api/system-logs] Backend error ${response.status}: ${errorText}`)
+      console.error(`[/api/system-logs/cleanup] Backend error ${response.status}: ${errorText}`)
       return NextResponse.json(
         { error: `Backend error: ${response.status}`, details: errorText },
         { status: response.status }
@@ -44,7 +43,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(data)
 
   } catch (error) {
-    console.error('[/api/system-logs] Internal Error:', error)
+    console.error('[/api/system-logs/cleanup] Internal Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

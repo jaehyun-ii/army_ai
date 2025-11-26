@@ -430,6 +430,46 @@ export function AIModelManagement() {
     setIsTestInferenceDialogOpen(true)
   }
 
+  // Download model
+  const downloadModel = async (model: AIModel) => {
+    try {
+      const response = await fetch(`/api/models/${model.id}/download`, {
+        method: 'GET',
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: '다운로드 실패' }))
+        throw new Error(errorData.detail || '모델 다운로드에 실패했습니다')
+      }
+
+      // Get filename from Content-Disposition header
+      const contentDisposition = response.headers.get('content-disposition')
+      let filename = `${model.name}_v${model.version}.zip`
+
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?(.+?)"?$/)
+        if (match) {
+          filename = match[1]
+        }
+      }
+
+      // Download the file
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Download error:', error)
+      const errorMsg = error instanceof Error ? error.message : '다운로드 중 오류가 발생했습니다'
+      alert(`다운로드 오류:\n${errorMsg}`)
+    }
+  }
+
   // Delete model
   const deleteModel = async () => {
     if (!modelToDelete) return
@@ -581,7 +621,12 @@ export function AIModelManagement() {
                         >
                           <Brain className="w-4 h-4" />
                         </Button>
-                        <Button variant="ghost" size="sm" title="다운로드">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="다운로드"
+                          onClick={() => downloadModel(model)}
+                        >
                           <Download className="w-4 h-4" />
                         </Button>
                         <Button

@@ -85,7 +85,7 @@ services:
       - ./storage:/storage:rw
       - backend_logs_dev:/app/logs
       # Hot reload: mount source code (uncomment if backend supports hot reload)
-      # - ./backend:/app:rw
+      - ./backend:/app:rw
     devices:
       # Camera devices access
       - /dev/video0:/dev/video0

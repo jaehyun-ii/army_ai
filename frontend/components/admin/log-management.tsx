@@ -57,6 +57,9 @@ export function LogManagement() {
   const [filterLevel, setFilterLevel] = useState<string>('all')
   const [searchTerm, setSearchTerm] = useState('')
   const [timeRange, setTimeRange] = useState<string>('24h')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalLogs, setTotalLogs] = useState(0)
+  const [pageSize, setPageSize] = useState(50)
   const { toast } = useToast()
 
   // Fetch logs from backend
@@ -64,7 +67,6 @@ export function LogManagement() {
     setLoading(true)
     try {
       const token = localStorage.getItem('token')
-      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
       // Calculate hours based on time range
       const hoursMap: Record<string, number> = {
@@ -75,11 +77,12 @@ export function LogManagement() {
       }
       const hours = hoursMap[timeRange] || 24
 
-      // Build query parameters
+      // Build query parameters with pagination
+      const skip = (currentPage - 1) * pageSize
       const params = new URLSearchParams({
         hours: hours.toString(),
-        skip: '0',
-        limit: '100',
+        skip: skip.toString(),
+        limit: pageSize.toString(),
       })
 
       if (filterLevel !== 'all') {
@@ -90,7 +93,7 @@ export function LogManagement() {
         params.append('search_term', searchTerm)
       }
 
-      const response = await fetch(`${backendUrl}/api/v1/system-logs?${params}`, {
+      const response = await fetch(`/api/system-logs?${params}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -103,6 +106,7 @@ export function LogManagement() {
 
       const data = await response.json()
       setLogs(data.logs || [])
+      setTotalLogs(data.total || 0)
     } catch (error) {
       console.error('Error fetching logs:', error)
       toast({
@@ -119,8 +123,7 @@ export function LogManagement() {
   const fetchStats = async () => {
     try {
       const token = localStorage.getItem('token')
-      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
+      
       const hoursMap: Record<string, number> = {
         '1h': 1,
         '24h': 24,
@@ -130,7 +133,7 @@ export function LogManagement() {
       const hours = hoursMap[timeRange] || 24
 
       const response = await fetch(
-        `${backendUrl}/api/v1/system-logs/statistics?hours=${hours}`,
+        `/api/system-logs/statistics?hours=${hours}`,
         {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -150,11 +153,20 @@ export function LogManagement() {
     }
   }
 
-  // Load data on mount and when filters change
+  // Load data on mount and when filters or page changes
   useEffect(() => {
     fetchLogs()
+  }, [filterLevel, timeRange, currentPage, pageSize])
+
+  // Fetch stats separately (doesn't need pagination)
+  useEffect(() => {
     fetchStats()
-  }, [filterLevel, timeRange])
+  }, [timeRange])
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [filterLevel, timeRange, searchTerm])
 
   // Handle search with debouncing
   useEffect(() => {
@@ -222,6 +234,61 @@ export function LogManagement() {
       description: "로그 데이터가 업데이트되었습니다.",
     })
   }
+
+  const handleExportCSV = () => {
+    try {
+      // CSV 헤더
+      const headers = ['시간', '레벨', '사용자', '작업', 'IP 주소', '메시지', '상태 코드', '응답 시간(ms)']
+
+      // CSV 데이터 행
+      const rows = logs.map(log => [
+        formatTimestamp(log.timestamp),
+        log.log_level,
+        log.username || '-',
+        log.action,
+        log.ip_address || '-',
+        `"${log.message.replace(/"/g, '""')}"`, // 따옴표 이스케이프
+        log.id,
+        log.module || '-',
+      ])
+
+      // CSV 문자열 생성
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(row => row.join(','))
+      ].join('\n')
+
+      // BOM 추가 (한글 깨짐 방지)
+      const BOM = '\uFEFF'
+      const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' })
+
+      // 다운로드
+      const link = document.createElement('a')
+      const url = URL.createObjectURL(blob)
+      link.setAttribute('href', url)
+      link.setAttribute('download', `system-logs-${new Date().toISOString().split('T')[0]}.csv`)
+      link.style.visibility = 'hidden'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+
+      toast({
+        title: "내보내기 완료",
+        description: `${logs.length}개의 로그를 CSV 파일로 저장했습니다.`,
+      })
+    } catch (error) {
+      console.error('Error exporting CSV:', error)
+      toast({
+        title: "오류",
+        description: "CSV 내보내기에 실패했습니다.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const totalPages = Math.ceil(totalLogs / pageSize)
+  const startIndex = (currentPage - 1) * pageSize + 1
+  const endIndex = Math.min(currentPage * pageSize, totalLogs)
 
   return (
     <div className="space-y-6">
@@ -304,9 +371,9 @@ export function LogManagement() {
               <CardDescription>시스템 활동 및 오류 로그를 관리합니다</CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled>
+              <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={logs.length === 0}>
                 <Download className="w-4 h-4 mr-2" />
-                내보내기
+                CSV 내보내기
               </Button>
               <Button size="sm" onClick={handleRefresh} disabled={loading}>
                 {loading ? (
@@ -400,9 +467,63 @@ export function LogManagement() {
                 </Table>
               </div>
 
-              <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
-                <p>총 {logs.length}개의 로그 항목</p>
-                <p>마지막 업데이트: {new Date().toLocaleString('ko-KR')}</p>
+              {/* Pagination */}
+              <div className="mt-4 flex items-center justify-between">
+                <div className="text-sm text-muted-foreground">
+                  <p>전체 {totalLogs.toLocaleString()}개 중 {startIndex.toLocaleString()}-{endIndex.toLocaleString()}개 표시</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                  >
+                    처음
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    이전
+                  </Button>
+
+                  <span className="text-sm text-muted-foreground px-3">
+                    페이지 {currentPage} / {totalPages}
+                  </span>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    다음
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                  >
+                    마지막
+                  </Button>
+
+                  <Select value={pageSize.toString()} onValueChange={(val) => setPageSize(Number(val))}>
+                    <SelectTrigger className="w-[100px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">10개</SelectItem>
+                      <SelectItem value="25">25개</SelectItem>
+                      <SelectItem value="50">50개</SelectItem>
+                      <SelectItem value="100">100개</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </>
           )}

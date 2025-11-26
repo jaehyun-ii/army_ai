@@ -10,9 +10,9 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
     const queryString = searchParams.toString()
-    const url = `${BACKEND_API_URL}/api/v1/system-logs${queryString ? `?${queryString}` : ''}`
+    const url = `${BACKEND_API_URL}/api/v1/system-logs/statistics${queryString ? `?${queryString}` : ''}`
     
-    console.log(`[/api/system-logs] Proxying GET request to ${url}`)
+    console.log(`[/api/system-logs/statistics] Proxying GET request to ${url}`)
 
     const cookieStore = cookies()
     const token = cookieStore.get('token')?.value || request.headers.get('authorization')?.replace('Bearer ', '')
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error(`[/api/system-logs] Backend error ${response.status}: ${errorText}`)
+      console.error(`[/api/system-logs/statistics] Backend error ${response.status}: ${errorText}`)
       return NextResponse.json(
         { error: `Backend error: ${response.status}`, details: errorText },
         { status: response.status }
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(data)
 
   } catch (error) {
-    console.error('[/api/system-logs] Internal Error:', error)
+    console.error('[/api/system-logs/statistics] Internal Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

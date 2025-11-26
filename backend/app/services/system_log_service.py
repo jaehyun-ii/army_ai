@@ -65,25 +65,44 @@ class SystemLogService:
             Created SystemLog instance
         """
         try:
-            log = SystemLog(
-                log_level=log_level,
-                user_id=user_id,
-                username=username,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                action=action,
-                module=module,
-                message=message,
-                details=details,
-                request_id=request_id,
-                endpoint=endpoint,
-                method=method,
-                status_code=status_code,
-                response_time_ms=response_time_ms,
-                error_type=error_type,
-                error_message=error_message,
-                stack_trace=stack_trace,
-            )
+            # Build log data dict, excluding None values for optional JSONB fields
+            log_data = {
+                "log_level": log_level,
+                "action": action,
+                "message": message,
+            }
+
+            # Add optional fields only if they are not None
+            if user_id is not None:
+                log_data["user_id"] = user_id
+            if username is not None:
+                log_data["username"] = username
+            if ip_address is not None:
+                log_data["ip_address"] = ip_address
+            if user_agent is not None:
+                log_data["user_agent"] = user_agent
+            if module is not None:
+                log_data["module"] = module
+            if details is not None:
+                log_data["details"] = details
+            if request_id is not None:
+                log_data["request_id"] = request_id
+            if endpoint is not None:
+                log_data["endpoint"] = endpoint
+            if method is not None:
+                log_data["method"] = method
+            if status_code is not None:
+                log_data["status_code"] = status_code
+            if response_time_ms is not None:
+                log_data["response_time_ms"] = response_time_ms
+            if error_type is not None:
+                log_data["error_type"] = error_type
+            if error_message is not None:
+                log_data["error_message"] = error_message
+            if stack_trace is not None:
+                log_data["stack_trace"] = stack_trace
+
+            log = SystemLog(**log_data)
             self.db.add(log)
             await self.db.commit()
             await self.db.refresh(log)

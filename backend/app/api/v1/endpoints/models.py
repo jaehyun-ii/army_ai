@@ -3,8 +3,11 @@ Model repository endpoints.
 """
 import shutil
 import uuid
+import tempfile
+import zipfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from uuid import UUID
@@ -455,4 +458,115 @@ async def predict_with_model(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {str(e)}"
+        )
+
+
+@router.get("/{model_id}/download")
+async def download_model_archive(
+    model_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Download model files (weights + config) as a ZIP archive.
+
+    Returns a ZIP file containing:
+    - Model weights file (.pt)
+    - Config file (.yaml, .yml, or .py)
+    - README with model metadata
+    """
+    # Get model from database
+    model = await crud.od_model.get(db, id=model_id)
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model with ID {model_id} not found",
+        )
+
+    # Get model artifacts
+    from sqlalchemy import select
+    from app.models.model_repo import ODModelArtifact
+
+    result = await db.execute(
+        select(ODModelArtifact)
+        .filter(
+            ODModelArtifact.model_id == model_id,
+            ODModelArtifact.deleted_at.is_(None)
+        )
+    )
+    artifacts = result.scalars().all()
+
+    if not artifacts:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No artifacts found for this model"
+        )
+
+    # Get model directory
+    from app.core.config import settings
+    model_dir = Path(settings.STORAGE_ROOT) / "models" / artifacts[0].storage_key
+
+    if not model_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model files not found in storage"
+        )
+
+    # Create temporary ZIP file
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+    temp_zip_path = Path(temp_zip.name)
+    temp_zip.close()
+
+    try:
+        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Add all artifact files
+            for artifact in artifacts:
+                file_path = model_dir / artifact.file_name
+                if file_path.exists():
+                    zipf.write(file_path, arcname=artifact.file_name)
+                    logger.info(f"Added {artifact.file_name} to archive")
+
+            # Create README with model metadata
+            readme_content = f"""# {model.name} v{model.version}
+
+## Model Information
+- **Name**: {model.name}
+- **Version**: {model.version}
+- **Framework**: {model.framework}
+- **Task**: {model.task}
+- **Stage**: {model.stage}
+- **Description**: {model.description or 'N/A'}
+
+## Model Specifications
+- **Input Spec**: {model.input_spec or 'N/A'}
+- **Label Map**: {model.labelmap or 'N/A'}
+
+## Inference Parameters
+{model.inference_params or 'N/A'}
+
+## Files Included
+"""
+            for artifact in artifacts:
+                readme_content += f"- {artifact.file_name} ({artifact.artifact_type})\n"
+
+            # Add README to ZIP
+            zipf.writestr('README.md', readme_content)
+
+        # Return ZIP file
+        zip_filename = f"{model.name}_v{model.version}.zip"
+
+        return FileResponse(
+            path=str(temp_zip_path),
+            filename=zip_filename,
+            media_type='application/zip',
+            background=None  # File will be deleted by cleanup
+        )
+
+    except Exception as e:
+        # Clean up temp file on error
+        if temp_zip_path.exists():
+            temp_zip_path.unlink()
+        logger.error(f"Failed to create model archive: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create model archive: {str(e)}"
         )
