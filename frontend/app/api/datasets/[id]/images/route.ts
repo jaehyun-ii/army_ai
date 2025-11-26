@@ -53,9 +53,19 @@ export async function GET(
       })
     }
 
-    // Enrich images with base64 data and fetch annotations from backend
-    const enrichedImages = await Promise.all(
-      images.map(async (image: any) => {
+    // Helper function to process images in batches to avoid DB connection pool exhaustion
+    async function processBatch<T, R>(items: T[], batchSize: number, processor: (item: T) => Promise<R>): Promise<R[]> {
+      const results: R[] = []
+      for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize)
+        const batchResults = await Promise.all(batch.map(processor))
+        results.push(...batchResults)
+      }
+      return results
+    }
+
+    // Enrich images with base64 data and fetch annotations from backend (process in batches of 10)
+    const enrichedImages = await processBatch(images, 10, async (image: any) => {
         let base64Data = null
         let detections = null
         let visualization = null
@@ -70,10 +80,9 @@ export async function GET(
             // If storage_key is relative, convert to absolute path using STORAGE_ROOT
             if (!path.isAbsolute(imagePath)) {
               // storage_key is now relative to STORAGE_ROOT (e.g., "datasets/test_dataset_20251029_114112/sample_image.jpg")
-              const cwd = process.cwd()
-              const storageRoot = path.join(cwd, '..', 'database', 'storage')
+              // In Docker, storage is mounted at /storage
+              const storageRoot = process.env.STORAGE_ROOT || '/storage'
               imagePath = path.join(storageRoot, imagePath)
-              console.log(`[/api/datasets/[id]/images] process.cwd(): ${cwd}`)
               console.log(`[/api/datasets/[id]/images] storageRoot: ${storageRoot}`)
               console.log(`[/api/datasets/[id]/images] Final imagePath: ${imagePath}`)
             }
@@ -156,8 +165,7 @@ export async function GET(
           detections,
           visualization,
         }
-      })
-    )
+    })
 
     return NextResponse.json({
       total: enrichedImages.length,

@@ -145,6 +145,9 @@ services:
       BACKEND_API_URL: ${INTERNAL_BACKEND_URL}
       BACKEND_URL: ${INTERNAL_BACKEND_URL}
 
+      # Storage
+      STORAGE_ROOT: /storage
+
       # Next.js Dev Server
       WATCHPACK_POLLING: "true"  # Enable file watching in Docker
       CHOKIDAR_USEPOLLING: "true"  # Fallback file watching
@@ -161,6 +164,8 @@ services:
       - frontend_logs_dev:/app/logs
       # Cache for Next.js
       - frontend_next_cache:/app/.next
+      # Shared storage for images (same as backend)
+      - ./storage:/storage:ro
     depends_on:
       postgres:
         condition: service_healthy

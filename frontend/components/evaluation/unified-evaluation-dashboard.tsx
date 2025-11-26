@@ -685,12 +685,11 @@ export function UnifiedEvaluationDashboard() {
                   타겟 클래스 (선택사항)
                   <span className="text-xs text-slate-400 ml-2">선택한 클래스의 AP@50을 별도로 표시합니다</span>
                 </Label>
-                <Select value={targetClass} onValueChange={setTargetClass}>
+                <Select value={targetClass || undefined} onValueChange={(value) => setTargetClass(value || "")}>
                   <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
-                    <SelectValue placeholder="타겟 클래스 선택 (선택사항)" />
+                    <SelectValue placeholder="전체 클래스 (타겟 클래스 미선택)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">전체 클래스</SelectItem>
                     {availableClasses.map((className) => (
                       <SelectItem key={className} value={className}>
                         {className}
@@ -698,6 +697,14 @@ export function UnifiedEvaluationDashboard() {
                     ))}
                   </SelectContent>
                 </Select>
+                {targetClass && (
+                  <button
+                    onClick={() => setTargetClass("")}
+                    className="text-xs text-slate-400 hover:text-slate-200 underline"
+                  >
+                    타겟 클래스 선택 해제
+                  </button>
+                )}
               </div>
             )}
 

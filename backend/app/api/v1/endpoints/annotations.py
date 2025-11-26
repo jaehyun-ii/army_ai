@@ -55,6 +55,9 @@ async def get_image_annotations(
         return [schemas.AnnotationResponse.model_validate(ann) for ann in annotations]
 
     except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error retrieving annotations for image {image_id}: {str(e)}", exc_info=True)
         raise InternalServerError(detail=f"Error retrieving annotations: {str(e)}")
 
 
