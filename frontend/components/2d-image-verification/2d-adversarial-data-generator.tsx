@@ -54,6 +54,12 @@ import { ImageWithBBox } from "@/components/annotations/ImageWithBBox"
 const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
 const API_V1_BASE = `${BACKEND_API_URL}/api/v1`
 
+// Validate name: only alphanumeric, dash, underscore
+const validateName = (name: string): boolean => {
+  const validPattern = /^[a-zA-Z0-9_-]+$/
+  return validPattern.test(name)
+}
+
 interface Dataset {
   id: string
   name: string
@@ -552,6 +558,11 @@ export function AdversarialDataGeneratorUpdated() {
       return
     }
 
+    if (!validateName(datasetName)) {
+      toast.error("데이터셋 이름은 영문자, 숫자, - (대시), _ (언더스코어)만 사용할 수 있습니다")
+      return
+    }
+
     if (!selectedDataset) {
       toast.error("데이터셋을 선택해주세요")
       return
@@ -744,10 +755,16 @@ export function AdversarialDataGeneratorUpdated() {
         <Label>공격 데이터셋 이름</Label>
         <Input
           value={datasetName}
-          onChange={(e) => setDatasetName(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === '' || validateName(value)) {
+              setDatasetName(value)
+            }
+          }}
           placeholder="공격 데이터셋 이름 입력"
           disabled={isGenerating}
         />
+        <p className="text-xs text-slate-400">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
       </div>
 
       <div className="space-y-2">

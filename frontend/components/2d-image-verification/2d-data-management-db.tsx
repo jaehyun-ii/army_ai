@@ -174,6 +174,12 @@ const formatDate = (dateString: string) => {
   })
 }
 
+// Validate name: only alphanumeric, dash, underscore
+const validateName = (name: string): boolean => {
+  const validPattern = /^[a-zA-Z0-9_-]+$/
+  return validPattern.test(name)
+}
+
 export function DataManagementDB() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [loadingDatasets, setLoadingDatasets] = useState(true)
@@ -606,6 +612,11 @@ export function DataManagementDB() {
   const handleUploadDataset = async () => {
     if (!uploadForm.name) {
       alert("데이터셋 이름을 입력해주세요.")
+      return
+    }
+
+    if (!validateName(uploadForm.name)) {
+      alert("데이터셋 이름은 영문자, 숫자, - (대시), _ (언더스코어)만 사용할 수 있습니다.")
       return
     }
 
@@ -1192,12 +1203,16 @@ export function DataManagementDB() {
               <Label className="text-slate-200">데이터셋 이름 *</Label>
               <Input
                 value={uploadForm.name}
-                onChange={(event) =>
-                  setUploadForm((prev) => ({ ...prev, name: event.target.value }))
-                }
+                onChange={(event) => {
+                  const value = event.target.value
+                  if (value === '' || validateName(value)) {
+                    setUploadForm((prev) => ({ ...prev, name: value }))
+                  }
+                }}
                 placeholder="예: COCO_Person_100"
                 className="mt-1 border-slate-800 bg-slate-900/70 text-slate-100 placeholder:text-slate-500"
               />
+              <p className="text-xs text-slate-400 mt-1">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
             </div>
 
             <div>
@@ -1222,8 +1237,14 @@ export function DataManagementDB() {
             </div>
 
             <div>
-              <Label className="text-slate-200">라벨 폴더 *</Label>
-              <div className="flex gap-2 mt-1">
+              <div className="flex items-center gap-2 mb-1">
+                <Label className="text-slate-200">라벨 폴더 *</Label>
+                <span className="text-xs text-slate-400">(객체의 위치 정보)</span>
+              </div>
+              <p className="text-xs text-slate-500 mb-2">
+                각 이미지에서 탐지된 객체의 <strong className="text-slate-400">위치(바운딩 박스)</strong>와 <strong className="text-slate-400">클래스 ID</strong>가 포함된 .txt 파일들
+              </p>
+              <div className="flex gap-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -1243,8 +1264,14 @@ export function DataManagementDB() {
             </div>
 
             <div>
-              <Label className="text-slate-200">클래스 파일 *</Label>
-              <div className="flex gap-2 mt-1">
+              <div className="flex items-center gap-2 mb-1">
+                <Label className="text-slate-200">클래스 파일 *</Label>
+                <span className="text-xs text-slate-400">(객체의 종류 목록)</span>
+              </div>
+              <p className="text-xs text-slate-500 mb-2">
+                탐지 가능한 <strong className="text-slate-400">모든 객체 종류의 이름</strong>이 나열된 파일 (예: person, car, dog 등)
+              </p>
+              <div className="flex gap-2">
                 <Button
                   type="button"
                   variant="outline"

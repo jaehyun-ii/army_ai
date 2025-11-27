@@ -51,6 +51,12 @@ import { ImageWithBBox } from "@/components/annotations/ImageWithBBox"
 // FastAPI backend URL - Use NEXT_PUBLIC_BACKEND_API_URL environment variable
 const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
 
+// Validate name: only alphanumeric, dash, underscore
+const validateName = (name: string): boolean => {
+  const validPattern = /^[a-zA-Z0-9_-]+$/
+  return validPattern.test(name)
+}
+
 interface Dataset {
   id: string
   name: string
@@ -443,6 +449,11 @@ export function AdversarialPatchGeneratorUpdated() {
       return
     }
 
+    if (!validateName(patchName)) {
+      toast.error("패치 이름은 영문자, 숫자, - (대시), _ (언더스코어)만 사용할 수 있습니다")
+      return
+    }
+
     if (!selectedDataset) {
       toast.error("데이터셋을 선택해주세요")
       return
@@ -658,14 +669,20 @@ export function AdversarialPatchGeneratorUpdated() {
         <Label>패치 이름</Label>
         <Input
           type="text"
-          placeholder="패치 이름 입력"
+          placeholder="예: attack_patch_01"
           value={patchName}
-          onChange={(e) => setPatchName(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === '' || validateName(value)) {
+              setPatchName(value)
+            }
+          }}
           disabled={isGenerating || (showPatchResult && generatedPatches.length > 0)}
         />
+        <p className="text-xs text-slate-400">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
         {patchName && (
-          <div className="text-xs text-slate-400">
-            다운로드 파일명: {patchName.replace(/[^a-zA-Z0-9가-힣_-]/g, '_') || 'adversarial_patch'}.png
+          <div className="text-xs text-slate-500">
+            다운로드 파일명: {patchName}.png
           </div>
         )}
       </div>

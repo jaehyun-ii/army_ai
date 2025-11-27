@@ -65,6 +65,12 @@ interface AutoDetectedMetadata {
   framework?: string
 }
 
+// Validate name: only alphanumeric, dash, underscore
+const validateName = (name: string): boolean => {
+  const validPattern = /^[a-zA-Z0-9_-]+$/
+  return validPattern.test(name)
+}
+
 // Simple File Upload Component (for .pt + optional config file)
 function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
   const [weightsFile, setWeightsFile] = useState<File | null>(null)
@@ -73,8 +79,6 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
   const [modelName, setModelName] = useState<string>('')
   const [modelVersion, setModelVersion] = useState<string>('1.0.0')
   const [modelDescription, setModelDescription] = useState<string>('')
-  const [framework, setFramework] = useState<string>('pytorch')
-  const [estimatorType, setEstimatorType] = useState<string>('')  // Empty = auto-detect
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -83,11 +87,6 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
     const file = e.target.files?.[0]
     if (file) {
       setWeightsFile(file)
-      // Auto-fill model name from filename
-      if (!modelName) {
-        const nameWithoutExt = file.name.replace(/\.(pt|pth)$/i, '')
-        setModelName(nameWithoutExt)
-      }
     }
   }
 
@@ -95,6 +94,16 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
     const file = e.target.files?.[0]
     if (file) {
       setConfigFile(file)
+    }
+  }
+
+  const handleModelNameChange = (value: string) => {
+    // Only allow alphanumeric, dash, underscore
+    if (value === '' || validateName(value)) {
+      setModelName(value)
+      setError(null)
+    } else {
+      setError('모델 이름은 영문자, 숫자, - (대시), _ (언더스코어)만 사용할 수 있습니다')
     }
   }
 
@@ -109,6 +118,11 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
       return
     }
 
+    if (!validateName(modelName)) {
+      setError('모델 이름은 영문자, 숫자, - (대시), _ (언더스코어)만 사용할 수 있습니다')
+      return
+    }
+
     setIsUploading(true)
     setError(null)
     setSuccess(null)
@@ -120,11 +134,9 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
         formData.append('yaml_file', configFile) // Backend still expects 'yaml_file' param
       }
 
-      // Add optional manual overrides
-      if (modelName) formData.append('name', modelName)
+      // Add manual settings
+      formData.append('name', modelName)  // Required
       if (modelVersion) formData.append('version', modelVersion)
-      if (framework) formData.append('framework', framework)
-      if (estimatorType) formData.append('estimator_type', estimatorType)
       if (modelDescription) formData.append('description', modelDescription)
 
       const response = await fetch('/api/models/upload', {
@@ -246,22 +258,23 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
           )}
         </div>
 
-        {/* Manual Override Section */}
-        <details className="border border-white/10 rounded-lg">
-          <summary className="cursor-pointer p-4 hover:bg-slate-700/30 rounded-lg">
-            <span className="font-semibold text-white">수동 설정 (선택사항)</span>
-          </summary>
-          <div className="p-4 space-y-4 border-t border-white/10">
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="model-name" className="text-white">모델 이름</Label>
-                <Input
-                  id="model-name"
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  placeholder="자동 감지된 이름 사용"
-                  className="bg-slate-700/50 border-white/10 text-white"
-                />
+        {/* Model Information Section */}
+        <div className="border border-white/10 rounded-lg p-4 space-y-4">
+          <h3 className="font-semibold text-white">모델 정보 <span className="text-red-400">*</span></h3>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="model-name" className="text-white">
+                모델 이름 <span className="text-red-400">*</span>
+              </Label>
+              <Input
+                id="model-name"
+                value={modelName}
+                onChange={(e) => handleModelNameChange(e.target.value)}
+                placeholder="예: yolov8_person_detector"
+                className="bg-slate-700/50 border-white/10 text-white"
+                required
+              />
+              <p className="text-xs text-slate-400 mt-1">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
               </div>
 
               <div className="space-y-2">
@@ -287,37 +300,8 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
                 className="bg-slate-700/50 border-white/10 text-white"
               />
             </div>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="framework" className="text-white">프레임워크</Label>
-                <Select value={framework} onValueChange={setFramework}>
-                  <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pytorch">PyTorch</SelectItem>
-                    <SelectItem value="tensorflow">TensorFlow</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="estimator-type" className="text-white">모델 타입</Label>
-                <Select value={estimatorType} onValueChange={setEstimatorType}>
-                  <SelectTrigger className="bg-slate-700/50 border-white/10 text-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="yolo">YOLO</SelectItem>
-                    <SelectItem value="faster_rcnn">Faster R-CNN</SelectItem>
-                    <SelectItem value="rt_detr">RT-DETR</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
           </div>
-        </details>
+        </div>
 
         <Button
           onClick={uploadModel}

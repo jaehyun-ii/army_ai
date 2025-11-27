@@ -26,12 +26,12 @@ from app.services.model_inference_service import model_inference_service
 
 # All attacks from app.ai (custom fork of ART)
 from app.ai.attacks.evasion import (
-    FastGradientMethod,
-    ProjectedGradientDescent,
     # PyTorch versions (primary, feature-complete implementations)
     UniversalNoiseAttackPyTorch,
     NoiseOSFDPyTorch,
 )
+from app.ai.attacks.evasion.fast_gradient_pytorch import FastGradientMethodPyTorch
+from app.ai.attacks.evasion.projected_gradient_descent_pytorch import ProjectedGradientDescentPyTorch
 
 logger = logging.getLogger(__name__)
 
@@ -175,20 +175,20 @@ class NoiseAttackService:
             eps_normalized = epsilon  # Keep in [0, 255] scale
 
             if attack_method == "fgsm":
-                attack = FastGradientMethod(
+                attack = FastGradientMethodPyTorch(
                     estimator=estimator,
                     norm=np.inf,
                     eps=eps_normalized,
                     targeted=False,
                     batch_size=16,  # Process images in batches for better performance
                 )
-                await sse_logger.info(f"FGSM 생성: epsilon={epsilon}, batch_size=16")
+                await sse_logger.info(f"FGSM (PyTorch) 생성: epsilon={epsilon}, batch_size=16")
 
             elif attack_method == "pgd":
                 # Normalize alpha as well
                 alpha_normalized = alpha
 
-                attack = ProjectedGradientDescent(
+                attack = ProjectedGradientDescentPyTorch(
                     estimator=estimator,
                     norm=np.inf,
                     eps=eps_normalized,

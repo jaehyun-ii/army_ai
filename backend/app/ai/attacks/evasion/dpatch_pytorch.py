@@ -94,6 +94,7 @@ class DPatchPyTorch(EvasionAttack):
         """
         super().__init__(estimator=estimator, summary_writer=summary_writer)
 
+        # Store patch_shape as (H, W, C) for API compatibility with original DPatch
         self.patch_shape = patch_shape
         self.learning_rate = learning_rate
         self.max_iter = max_iter
@@ -101,27 +102,30 @@ class DPatchPyTorch(EvasionAttack):
         self.verbose = verbose
         self._check_params()
 
-        # Device management
+        # Device management (consistent with other PyTorch attacks)
         self.device = self.estimator.device
         self._torch_model = self.estimator.model
 
-        # Initialize patch as PyTorch parameter
+        # Initialize patch as PyTorch parameter in (C, H, W) format (PyTorch standard)
+        # Convert from (H, W, C) API to (C, H, W) internal representation
+        patch_shape_internal = (patch_shape[2], patch_shape[0], patch_shape[1])  # (C, H, W)
+
         if self.estimator.clip_values is None:
-            patch_init = torch.zeros(patch_shape, dtype=torch.float32, device=self.device)
+            patch_init = torch.zeros(patch_shape_internal, dtype=torch.float32, device=self.device)
         else:
             patch_init = (
-                torch.randint(0, 256, size=patch_shape, device=self.device).float()
+                torch.randint(0, 256, size=patch_shape_internal, device=self.device).float()
                 / 255
                 * (self.estimator.clip_values[1] - self.estimator.clip_values[0])
                 + self.estimator.clip_values[0]
             )
 
-        # Patch is a learnable parameter (C, H, W) or (H, W, C) based on channels_first
+        # Patch is a learnable parameter in (C, H, W) format (PyTorch standard)
         self._patch = nn.Parameter(patch_init)
 
         self.target_label: int | np.ndarray | list[int] | None = []
 
-        logger.info(f"DPatchPyTorch initialized on device: {self.device}")
+        logger.info(f"DPatchPyTorch initialized on device: {self.device}, patch shape (C,H,W): {self._patch.shape}")
 
     def generate(
         self,
@@ -212,7 +216,7 @@ class DPatchPyTorch(EvasionAttack):
         Generate random patch locations for each image.
 
         Args:
-            x: Input images (B, C, H, W)
+            x: Input images (B, C, H, W) - always channels_first after preprocessing
             mask: Optional mask for valid patch locations
 
         Returns:
@@ -220,13 +224,11 @@ class DPatchPyTorch(EvasionAttack):
         """
         transforms = []
 
-        # Get image dimensions
-        if self.estimator.channels_first:
-            img_h, img_w = x.shape[2], x.shape[3]
-            patch_h, patch_w = self.patch_shape[1], self.patch_shape[2]
-        else:
-            img_h, img_w = x.shape[1], x.shape[2]
-            patch_h, patch_w = self.patch_shape[0], self.patch_shape[1]
+        # Get image and patch dimensions
+        # x is always (B, C, H, W) after _preprocess_and_convert
+        img_h, img_w = x.shape[2], x.shape[3]
+        # self._patch is (C, H, W), so patch height and width are:
+        patch_h, patch_w = self._patch.shape[1], self._patch.shape[2]
 
         for i in range(x.shape[0]):
             if mask is None:
@@ -353,106 +355,6 @@ class DPatchPyTorch(EvasionAttack):
 
         return patch_target
 
-    def _train_patch_pytorch(
-        self,
-        x: torch.Tensor,
-        transforms: list[dict[str, int]],
-        patch_targets: list[dict[str, torch.Tensor]]
-    ):
-        """
-        Train patch using PyTorch with DataLoader (Type 1 pattern) and ART gradients.
-
-        Args:
-            x: Input images (B, C, H, W)
-            transforms: Patch location transforms
-            patch_targets: Target labels for each image
-        """
-        logger.info(f"Training DPatch for {self.max_iter} iterations")
-
-        # Create custom dataset
-        class PatchDataset(torch.utils.data.Dataset):
-            def __init__(self, images, transforms_list, targets):
-                self.images = images
-                self.transforms_list = transforms_list
-                self.targets = targets
-
-            def __len__(self):
-                return len(self.images)
-
-            def __getitem__(self, idx):
-                return self.images[idx], self.transforms_list[idx], self.targets[idx]
-
-        # Create DataLoader (Type 1 pattern)
-        dataset = PatchDataset(x, transforms, patch_targets)
-        data_loader = torch.utils.data.DataLoader(
-            dataset=dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            drop_last=False
-        )
-
-        logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
-
-        # Training loop
-        for i_step in trange(self.max_iter, desc="DPatch Training", disable=not self.verbose):
-            if i_step == 0 or (i_step + 1) % 100 == 0:
-                logger.info(f"Training Step: {i_step + 1}")
-
-            patch_gradients = torch.zeros_like(self._patch)
-
-            # Process batches using DataLoader (Type 1)
-            for batch_images, batch_transforms, batch_targets in data_loader:
-                batch_images = batch_images.to(self.device)
-
-                # Apply patch to images (Torch)
-                patched_images = self._apply_patch_to_batch(
-                    batch_images, batch_transforms
-                )
-
-                # Convert to NumPy for ART estimator
-                patched_np = patched_images.detach().cpu().numpy()
-                if not self.estimator.channels_first:
-                    patched_np = np.transpose(patched_np, (0, 2, 3, 1))
-                
-                if self.estimator.clip_values is not None:
-                    # ART expects inputs in original range usually, but predict/loss_gradient handling depends on wrapper.
-                    # Standard ART pattern for loss_gradient is to pass preprocessed input (like [0,1] or [0,255]).
-                    # Our x_torch is already preprocessed by `_preprocess_and_convert_inputs`.
-                    # However, if clip_values are used for denormalization (like in UniversalNoiseAttackPyTorch):
-                    patched_np = patched_np * self.estimator.clip_values[1]
-
-                # Prepare targets as NumPy list of dicts
-                batch_targets_np = []
-                # batch_targets is a dict of collated tensors (if from DataLoader) OR list of dicts (if custom collation)
-                # Default collation turns list of dicts into dict of stacked tensors.
-                # batch_targets: {'boxes': Tensor(B, N, 4), ...} - Wait, boxes can have different number of boxes!
-                # Standard DataLoader fails with variable length tensors unless we use custom collate_fn.
-                # BUT, `_create_patch_targets` creates targets.
-                # If untargeted, targets come from predictions. Predictions can have variable boxes.
-                # If targeted, we create 1 box per image. This is constant shape!
-                # So for Targeted attack, default collate works.
-                # For Untargeted attack, default collate MIGHT fail if box counts differ.
-                
-                # Let's handle the Untargeted case properly. We should probably use a custom collate or just lists.
-                # Since I didn't implement custom collate, let's assume variable boxes will crash if we don't handle it.
-                # However, `DPatch` usually takes `y` which has specific targets.
-                # If `y` comes from `predict`, it varies.
-                # To be safe, we should reconstruct the list of dicts from whatever `batch_targets` is,
-                # OR (easier) iterate indices and pull from `patch_targets` list directly if we didn't shuffle?
-                # We set `shuffle=False`. So we can map batch indices back to global indices.
-                
-                # Actually, let's rely on the `loss_gradient` call which needs list of dicts.
-                
-                # Helper to reconstruct list of dicts from batch_targets (assuming collated tensors):
-                # If collated, `batch_targets['boxes']` is (B, MaxBoxes, 4) with padding? No, PyTorch throws error.
-                
-                # FIX: We'll iterate the dataset directly in chunks instead of relying on DataLoader collation for complex types?
-                # No, we want DataLoader features.
-                # Let's define a `collate_fn` that keeps targets as list.
-                pass 
-            
-            # ... (See corrected implementation below)
-
     def _apply_patch_to_batch(
         self,
         images: torch.Tensor,
@@ -462,36 +364,43 @@ class DPatchPyTorch(EvasionAttack):
         Apply patch to a batch of images.
 
         Args:
-            images: Batch of images (B, C, H, W) or (B, H, W, C)
+            images: Batch of images (B, C, H, W) - always channels_first after preprocessing
             transforms: Patch locations (collated dict of tensors)
 
         Returns:
-            Patched images
+            Patched images (B, C, H, W)
         """
         patched = images.clone()
-        
+
         # Iterate batch
+        # images is always (B, C, H, W), self._patch is (C, H, W)
         for i in range(images.shape[0]):
             i_x_1 = transforms["i_x_1"][i]
             i_x_2 = transforms["i_x_2"][i]
             i_y_1 = transforms["i_y_1"][i]
             i_y_2 = transforms["i_y_2"][i]
 
-            if self.estimator.channels_first:
-                patched[i, :, i_x_1:i_x_2, i_y_1:i_y_2] = self._patch
-            else:
-                patched[i, i_x_1:i_x_2, i_y_1:i_y_2, :] = self._patch
+            # Apply patch: patched[B, C, H, W] = patch[C, H, W]
+            patched[i, :, i_x_1:i_x_2, i_y_1:i_y_2] = self._patch
 
         return patched
 
     def _patch_to_numpy(self) -> np.ndarray:
-        """Convert patch from PyTorch to NumPy."""
+        """
+        Convert patch from PyTorch to NumPy.
+
+        Internal patch is (C, H, W), return as (H, W, C) for API compatibility.
+        """
         patch_np = self._patch.detach().cpu().numpy()
 
-        # Handle channels_first/last
-        if self.estimator.channels_first:
-            # (C, H, W) -> (H, W, C)
-            patch_np = np.transpose(patch_np, (1, 2, 0))
+        # Always convert from (C, H, W) to (H, W, C) for API compatibility
+        patch_np = np.transpose(patch_np, (1, 2, 0))
+
+        # Denormalize if needed (consistent with other PyTorch attacks)
+        if self.estimator.clip_values is not None:
+            min_val, max_val = self.estimator.clip_values
+            if max_val > 1:
+                patch_np = patch_np * max_val
 
         return patch_np.astype(np.float32)
 
@@ -539,21 +448,20 @@ class DPatchPyTorch(EvasionAttack):
 
         # Use external patch if provided
         if patch_external is not None:
+            # External patch is (H, W, C), convert to (C, H, W)
             patch_torch = torch.from_numpy(patch_external).float().to(self.device)
-            if not self.estimator.channels_first:
-                # (H, W, C) -> (C, H, W)
-                patch_torch = patch_torch.permute(2, 0, 1)
+            patch_torch = patch_torch.permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
         else:
-            patch_torch = self._patch
+            patch_torch = self._patch  # Already (C, H, W)
 
         # Generate patch locations
         transforms = self._generate_patch_locations(x_torch, mask)
-        
+
         # Prepare dict for _apply_patch_to_batch (which expects collated format)
         # transforms is list of dicts.
         transforms_collated = {}
         for key in transforms[0].keys():
-             transforms_collated[key] = torch.tensor([t[key] for t in transforms], device=self.device)
+            transforms_collated[key] = torch.tensor([t[key] for t in transforms], device=self.device)
 
         # Temporarily replace patch
         original_patch = self._patch
@@ -565,12 +473,16 @@ class DPatchPyTorch(EvasionAttack):
         # Restore original patch
         self._patch = original_patch
 
-        # Convert back to NumPy
+        # Convert back to NumPy (consistent with other attacks)
         patched_numpy = patched_torch.detach().cpu().numpy()
-        if not self.estimator.channels_first:
-            patched_numpy = np.transpose(patched_numpy, (0, 2, 3, 1))
+        # Always (B, C, H, W) -> (B, H, W, C) for API
+        patched_numpy = np.transpose(patched_numpy, (0, 2, 3, 1))
+
+        # Denormalize if needed
         if self.estimator.clip_values is not None:
-            patched_numpy = patched_numpy * self.estimator.clip_values[1]
+            min_val, max_val = self.estimator.clip_values
+            if max_val > 1:
+                patched_numpy = patched_numpy * max_val
 
         return patched_numpy.astype(np.float32)
 
@@ -606,14 +518,15 @@ class DPatchPyTorch(EvasionAttack):
         patch_targets: list[dict[str, torch.Tensor]]
     ):
         """
-        Train patch using PyTorch with DataLoader (Type 1 pattern) and ART gradients.
+        Train patch using PyTorch with DataLoader (Type 1 pattern) in a fully-differentiable manner.
+        This version avoids the costly NumPy-PyTorch conversions of the original implementation.
 
         Args:
             x: Input images (B, C, H, W)
             transforms: Patch location transforms
             patch_targets: Target labels for each image
         """
-        logger.info(f"Training DPatch for {self.max_iter} iterations")
+        logger.info(f"Training DPatch for {self.max_iter} iterations using pure PyTorch backend.")
 
         # Custom collate to handle list of dicts (targets)
         def collate_fn(batch):
@@ -650,14 +563,16 @@ class DPatchPyTorch(EvasionAttack):
 
         logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
 
+        # Optimizer for the patch
+        optimizer = torch.optim.Adam([self._patch], lr=self.learning_rate)
+
         # Training loop
         for i_step in trange(self.max_iter, desc="DPatch Training", disable=not self.verbose):
-            if i_step == 0 or (i_step + 1) % 100 == 0:
-                logger.info(f"Training Step: {i_step + 1}")
+            
+            # Zero the gradients for the patch at the beginning of each full data pass
+            optimizer.zero_grad()
 
-            patch_gradients = torch.zeros_like(self._patch)
-
-            # Process batches using DataLoader (Type 1)
+            # Process batches using DataLoader
             for batch_images, batch_transforms, batch_targets in data_loader:
                 batch_images = batch_images.to(self.device)
 
@@ -665,58 +580,31 @@ class DPatchPyTorch(EvasionAttack):
                 patched_images = self._apply_patch_to_batch(
                     batch_images, batch_transforms
                 )
-
-                # Convert to NumPy for ART estimator
-                patched_np = patched_images.detach().cpu().numpy()
-                if not self.estimator.channels_first:
-                    patched_np = np.transpose(patched_np, (0, 2, 3, 1))
                 
+                # Ensure patched images are within valid range
                 if self.estimator.clip_values is not None:
-                    patched_np = patched_np * self.estimator.clip_values[1]
+                    patched_images.clamp_(self.estimator.clip_values[0], self.estimator.clip_values[1])
 
-                # Prepare targets as NumPy list of dicts
-                batch_targets_np = []
-                for t in batch_targets:
-                    target_np = {
-                        'boxes': t['boxes'].cpu().numpy(),
-                        'labels': t['labels'].cpu().numpy(),
-                        'scores': t['scores'].cpu().numpy()
-                    }
-                    batch_targets_np.append(target_np)
+                # Compute loss using the estimator's native PyTorch loss function
+                loss = self.estimator.compute_loss(x=patched_images, y=batch_targets, standardise_output=True)
 
-                # Get Gradients from ART (NumPy)
-                gradients_np = self.estimator.loss_gradient(
-                    x=patched_np, 
-                    y=batch_targets_np, 
-                    standardise_output=True
-                )
-                
-                # Convert gradients back to Torch
-                if not self.estimator.channels_first:
-                    # (B, H, W, C) -> (B, C, H, W)
-                    gradients_np = np.transpose(gradients_np, (0, 3, 1, 2))
-                
-                gradients = torch.from_numpy(gradients_np).to(self.device)
+                # For untargeted attacks, we want to maximize the loss
+                if not self.target_label:
+                    loss = -loss
 
-                # Extract Patch Gradients (Summing specific regions)
-                for i in range(gradients.shape[0]):
-                    i_x_1 = batch_transforms["i_x_1"][i]
-                    i_x_2 = batch_transforms["i_x_2"][i]
-                    i_y_1 = batch_transforms["i_y_1"][i]
-                    i_y_2 = batch_transforms["i_y_2"][i]
-                    
-                    # gradients is (B, C, H, W)
-                    grad_patch = gradients[i, :, i_x_1:i_x_2, i_y_1:i_y_2]
-                    patch_gradients += grad_patch
+                # Backward pass to accumulate gradients for the patch.
+                # The gradient is accumulated over all batches.
+                loss.backward()
 
-            # Update Patch
+            # After iterating through all batches, update the patch using the accumulated gradient
             with torch.no_grad():
-                if self.target_label:
-                     self._patch.data -= torch.sign(patch_gradients) * self.learning_rate
-                else:
-                     self._patch.data += torch.sign(patch_gradients) * self.learning_rate
+                # We use a simple sign-based update, not the Adam optimizer's step.
+                # The optimizer was just a convenient way to manage .zero_grad().
+                grad = self._patch.grad
+                if grad is not None:
+                     self._patch.data += torch.sign(grad) * self.learning_rate * (-1 if self.target_label else 1)
                 
-                # Clip
+                # Clip patch values
                 if self.estimator.clip_values is not None:
                     self._patch.data.clamp_(
                         self.estimator.clip_values[0],
@@ -728,12 +616,12 @@ class DPatchPyTorch(EvasionAttack):
                 self.summary_writer.update(
                     batch_id=0,
                     global_step=i_step,
-                    grad=patch_gradients.cpu().numpy(),
+                    grad=self._patch.grad.cpu().numpy() if self._patch.grad is not None else None,
                     patch=self._patch.detach().cpu().numpy(),
                     estimator=self.estimator,
                     x=None,
                     y=None,
-                    targeted=self.target_label is not None,
+                    targeted=bool(self.target_label),
                 )
 
         if self.summary_writer is not None:

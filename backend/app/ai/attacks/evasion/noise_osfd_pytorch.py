@@ -22,7 +22,6 @@ from torchvision.transforms import functional as TF
 import random
 
 from app.ai.attacks.attack import EvasionAttack
-from app.ai.attacks.evasion._pytorch_universal_base import PyTorchUniversalPerturbationAttack
 from app.ai.estimators.estimator import BaseEstimator, LossGradientsMixin
 from app.ai.estimators.object_detection.object_detector import ObjectDetectorMixin
 from app.ai.summary_writer import SummaryWriter
@@ -356,7 +355,7 @@ class _RRBAugmentation(nn.Module):
         return torch.stack(augmented_batch)
 
 
-class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
+class NoiseOSFDPyTorch(EvasionAttack):
     """
     Noise OSFD Attack with full functionality restored using PyTorch.
 
@@ -374,6 +373,7 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
         "apply_augmentation",
         "summary_writer",
         "verbose",
+        "return_perturbation",
     ]
 
     _estimator_requirements = (BaseEstimator, LossGradientsMixin, ObjectDetectorMixin)
@@ -411,6 +411,11 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
         """
         super().__init__(estimator=estimator, summary_writer=summary_writer)
 
+        # Device management
+        self.device = self.estimator.device
+        self._torch_model = self.estimator.model
+
+        # Attack parameters
         self.eps = eps
         self.eps_step = eps_step
         self.max_iter = max_iter
@@ -419,7 +424,12 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
         self.amplification_factor = amplification_factor
         self.apply_augmentation = apply_augmentation
         self.verbose = verbose
+        self.clip_min, self.clip_max = self._get_clip_bounds()
         self._check_params()
+
+        # Universal perturbation (PyTorch parameter)
+        self._perturbation_torch: nn.Parameter | None = None
+        self._perturbation: np.ndarray | None = None
 
         logger.info(f"NoiseOSFDPyTorch initialized on device: {self.device}")
 
@@ -443,17 +453,20 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
         self,
         x: np.ndarray,
         y: np.ndarray | None = None,
+        *,
+        return_perturbation: bool = False,
         **kwargs,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """
         Generate universal adversarial perturbation using OSFD.
 
         Args:
             x: Sample images (N, H, W, C) or (N, C, H, W) - NumPy
             y: Optional target labels with bounding boxes. If provided, apply perturbation only to those regions.
+            return_perturbation: If True, also return the learned universal perturbation.
 
         Returns:
-            Tuple of (adversarial images, universal perturbation) - NumPy
+            Adversarial images. If `return_perturbation=True`, also returns the learned perturbation.
         """
         logger.info(f"Starting OSFD generation with {len(x)} images")
 
@@ -483,7 +496,7 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
             # Apply perturbation to entire image
             logger.info("Applying perturbation to entire images (no masking)")
             with torch.no_grad():
-                x_adv_torch = torch.clamp(x_torch + self._perturbation_torch, 0, 1)
+                x_adv_torch = torch.clamp(x_torch + self._perturbation_torch, self.clip_min, self.clip_max)
 
         # Convert back to NumPy (use ART's reverse conversion)
         x_adv = self._torch_to_numpy(x_adv_torch, x)
@@ -495,7 +508,9 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
             self._feature_extractor = None
 
         logger.info("OSFD generation completed")
-        return x_adv, self._perturbation
+        if return_perturbation:
+            return x_adv, self._perturbation
+        return x_adv
 
     def _train_osfd_perturbation_pytorch(self, x: torch.Tensor):
         """
@@ -553,7 +568,7 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
                     benign_features = self._feature_extractor(x_batch)
 
                 # Apply perturbation (broadcast to batch)
-                x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, 0, 1)
+                x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, self.clip_min, self.clip_max)
 
                 # Apply augmentation for robustness
                 if self.apply_augmentation and self._augmentation is not None:
@@ -679,8 +694,92 @@ class NoiseOSFDPyTorch(PyTorchUniversalPerturbationAttack):
 
             # Apply masked perturbation
             perturbation_masked = self._perturbation_torch[0] * mask
-            x_adv[i] = torch.clamp(x[i] + perturbation_masked, 0, 1)
+            x_adv[i] = torch.clamp(x[i] + perturbation_masked, self.clip_min, self.clip_max)
 
         return x_adv
 
-    # perturbation property and set_perturbation method inherited from base class
+    def _initialize_perturbation(self, x: torch.Tensor) -> None:
+        """
+        Initialize universal perturbation tensor.
+
+        Args:
+            x: Input tensor to determine shape (B, C, H, W)
+        """
+        if self._perturbation_torch is None:
+            self._perturbation_torch = nn.Parameter(
+                torch.zeros(
+                    1, x.shape[1], x.shape[2], x.shape[3],
+                    dtype=torch.float32,
+                    device=self.device
+                )
+            )
+            logger.info(f"Initialized perturbation: {self._perturbation_torch.shape}")
+
+    def _preprocess_and_convert(self, x: np.ndarray) -> tuple[torch.Tensor, np.ndarray]:
+        """
+        Preprocess inputs using ART's standard preprocessing.
+
+        Args:
+            x: Input images (N, H, W, C) or (N, C, H, W) - NumPy
+
+        Returns:
+            Tuple of (preprocessed torch tensor, original numpy array)
+        """
+        x_torch, _ = self.estimator._preprocess_and_convert_inputs(
+            x=x, y=None, fit=False, no_grad=True
+        )
+        logger.debug(f"Input converted to torch: {x_torch.shape}, device: {x_torch.device}")
+        return x_torch, x
+
+    def _torch_to_numpy(self, x_torch: torch.Tensor, x_original: np.ndarray) -> np.ndarray:
+        """
+        Convert PyTorch tensor back to NumPy array matching original format.
+
+        Args:
+            x_torch: Torch tensor to convert
+            x_original: Original NumPy array (for shape reference)
+
+        Returns:
+            NumPy array in the same format as x_original
+        """
+        x_np = x_torch.detach().cpu().numpy()
+
+        # Denormalize if needed
+        if self.estimator.clip_values is not None:
+            min_val, max_val = self.estimator.clip_values
+            if max_val > 1 and x_np.max() <= 1.0:
+                x_np = x_np * max_val
+        elif self.clip_max > 1 and x_np.max() <= 1.0:
+            x_np = x_np * self.clip_max
+
+        # Handle channels_first/last to match original format
+        if not self.estimator.channels_first and x_np.ndim == 4:
+            # (N, C, H, W) -> (N, H, W, C)
+            x_np = np.transpose(x_np, (0, 2, 3, 1))
+
+        return x_np.astype(np.float32)
+
+    def _get_clip_bounds(self) -> tuple[float, float]:
+        """
+        Determine clipping bounds; fall back to detector-friendly [0, 255].
+        """
+        if self.estimator.clip_values is not None:
+            return float(self.estimator.clip_values[0]), float(self.estimator.clip_values[1])
+        return 0.0, 255.0
+
+    @property
+    def perturbation(self) -> np.ndarray | None:
+        """Get the current universal perturbation (NumPy)."""
+        return self._perturbation
+
+    def set_perturbation(self, perturbation: np.ndarray) -> None:
+        """
+        Set a pre-trained universal perturbation.
+
+        Args:
+            perturbation: Perturbation to set (NumPy array)
+        """
+        self._perturbation = perturbation
+        self._perturbation_torch = nn.Parameter(
+            torch.from_numpy(perturbation).float().to(self.device)
+        )

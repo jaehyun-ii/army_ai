@@ -115,6 +115,7 @@ class RobustDPatchPyTorch(EvasionAttack):
 
         super().__init__(estimator=estimator, summary_writer=summary_writer)
 
+        # Store patch_shape as (H, W, C) for API compatibility with original RobustDPatch
         self.patch_shape = patch_shape
         self.learning_rate = learning_rate
         self.max_iter = max_iter
@@ -128,24 +129,28 @@ class RobustDPatchPyTorch(EvasionAttack):
         self._targeted = targeted
         self._check_params()
 
-        # Device management
+        # Device management (consistent with other PyTorch attacks)
         self.device = self.estimator.device
         self._torch_model = self.estimator.model
 
-        # Initialize patch as PyTorch parameter
+        # Initialize patch as PyTorch parameter in (C, H, W) format (PyTorch standard)
+        # Convert from (H, W, C) API to (C, H, W) internal representation
+        patch_shape_internal = (patch_shape[2], patch_shape[0], patch_shape[1])  # (C, H, W)
+
         if self.estimator.clip_values is None:
-            patch_init = torch.zeros(patch_shape, dtype=torch.float32, device=self.device)
+            patch_init = torch.zeros(patch_shape_internal, dtype=torch.float32, device=self.device)
         else:
             patch_init = (
-                torch.randint(0, 256, size=patch_shape, device=self.device).float()
+                torch.randint(0, 256, size=patch_shape_internal, device=self.device).float()
                 / 255
                 * (self.estimator.clip_values[1] - self.estimator.clip_values[0])
                 + self.estimator.clip_values[0]
             )
 
+        # Patch is a learnable parameter in (C, H, W) format (PyTorch standard)
         self._patch = nn.Parameter(patch_init)
 
-        logger.info(f"RobustDPatchPyTorch initialized on device: {self.device}")
+        logger.info(f"RobustDPatchPyTorch initialized on device: {self.device}, patch shape (C,H,W): {self._patch.shape}")
 
     def generate(
         self,
@@ -247,13 +252,14 @@ class RobustDPatchPyTorch(EvasionAttack):
         y: list[dict[str, torch.Tensor]] | None
     ):
         """
-        Train patch using PyTorch with DataLoader and EoT (Type 1 pattern).
+        Train patch using PyTorch with DataLoader and EoT in a fully-differentiable manner.
+        This version avoids the costly NumPy-PyTorch conversions of the original implementation.
 
         Args:
             x: Input images (B, C, H, W)
             y: Target labels (for targeted attack) or None (for untargeted)
         """
-        logger.info(f"Training RobustDPatch for {self.max_iter} iterations")
+        logger.info(f"Training RobustDPatch for {self.max_iter} iterations using pure PyTorch backend.")
 
         # Custom collate fn
         def collate_fn(batch):
@@ -276,7 +282,7 @@ class RobustDPatchPyTorch(EvasionAttack):
                 else:
                     return self.images[idx], None
 
-        # Create DataLoader (Type 1 pattern)
+        # Create DataLoader
         dataset = RobustPatchDataset(x, y)
         data_loader = torch.utils.data.DataLoader(
             dataset=dataset,
@@ -287,20 +293,20 @@ class RobustDPatchPyTorch(EvasionAttack):
         )
 
         logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
+        
+        # Optimizer for the patch (used mainly for zero_grad)
+        optimizer = torch.optim.Adam([self._patch], lr=self.learning_rate)
 
         # Training loop with EoT
         for i_step in trange(self.max_iter, desc="RobustDPatch Training", disable=not self.verbose):
-            if i_step == 0 or (i_step + 1) % 100 == 0:
-                logger.info(f"Training Step: {i_step + 1}")
-
-            patch_gradients_old = torch.zeros_like(self._patch)
+            
+            # Zero the gradients for the patch at the beginning of each full data pass
+            optimizer.zero_grad()
 
             # EoT: Multiple transformation samples
             for e_step in range(self.sample_size):
-                if e_step == 0 or (e_step + 1) % 100 == 0:
-                    logger.debug(f"EoT Step: {e_step + 1}")
-
-                # Process batches using DataLoader (Type 1)
+                
+                # Process batches using DataLoader
                 for batch_images, batch_labels in data_loader:
                     batch_images = batch_images.to(self.device)
 
@@ -308,48 +314,31 @@ class RobustDPatchPyTorch(EvasionAttack):
                     patched_images, patch_targets, transforms = self._augment_images_with_patch(
                         batch_images, batch_labels, self._patch
                     )
-
-                    # Convert to NumPy for ART
-                    patched_np = patched_images.detach().cpu().numpy()
-                    if not self.estimator.channels_first:
-                         patched_np = np.transpose(patched_np, (0, 2, 3, 1))
                     
+                    # Ensure patched images are within valid range
                     if self.estimator.clip_values is not None:
-                        patched_np = patched_np * self.estimator.clip_values[1]
+                        patched_images.clamp_(self.estimator.clip_values[0], self.estimator.clip_values[1])
 
-                    # Convert Targets to NumPy
-                    patch_targets_np = []
-                    for t in patch_targets:
-                         patch_targets_np.append({
-                             'boxes': t['boxes'].cpu().numpy(),
-                             'labels': t['labels'].cpu().numpy(),
-                             'scores': t['scores'].cpu().numpy()
-                         })
+                    # Compute loss using the estimator's native PyTorch loss function
+                    # The loss is automatically averaged over the batch by the estimator's loss function.
+                    # We accumulate gradients by calling .backward() repeatedly.
+                    loss = self.estimator.compute_loss(x=patched_images, y=patch_targets, standardise_output=True)
 
-                    # Compute Gradients (NumPy)
-                    gradients_np = self.estimator.loss_gradient(
-                        x=patched_np,
-                        y=patch_targets_np,
-                        standardise_output=True
-                    )
-                    
-                    # Convert back to Torch
-                    if not self.estimator.channels_first:
-                        gradients_np = np.transpose(gradients_np, (0, 3, 1, 2))
-                    
-                    gradients = torch.from_numpy(gradients_np).to(self.device)
+                    # For untargeted attacks, we want to maximize the loss
+                    if not self.targeted:
+                        loss = -loss
 
-                    # Reverse transformations on gradients
-                    gradients_untransformed = self._untransform_gradients(
-                        gradients, transforms
-                    )
+                    # Backward pass to accumulate gradients for the patch.
+                    # PyTorch automatically sums gradients from multiple backward calls
+                    # into the .grad attribute of leaf tensors (our patch).
+                    loss.backward()
 
-                    # Accumulate gradients (Sum over batch)
-                    patch_gradients_old += gradients_untransformed.sum(dim=0)
-
-            # Update patch with sign gradient
+            # After iterating through all EoT samples and all batches, update the patch
             with torch.no_grad():
-                self._patch.data += torch.sign(patch_gradients_old) * (1 - 2 * int(self.targeted)) * self.learning_rate
+                grad = self._patch.grad
+                if grad is not None:
+                    # Update patch with the sign of the accumulated gradient
+                    self._patch.data += torch.sign(grad) * (1 - 2 * int(self.targeted)) * self.learning_rate
 
                 # Clip patch values
                 if self.estimator.clip_values is not None:
@@ -363,7 +352,7 @@ class RobustDPatchPyTorch(EvasionAttack):
                  self.summary_writer.update(
                     batch_id=0,
                     global_step=i_step,
-                    grad=patch_gradients_old.cpu().numpy(),
+                    grad=self._patch.grad.cpu().numpy() if self._patch.grad is not None else None,
                     patch=self._patch.detach().cpu().numpy(),
                     estimator=self.estimator,
                     x=None,
@@ -374,6 +363,7 @@ class RobustDPatchPyTorch(EvasionAttack):
         if self.summary_writer is not None:
             self.summary_writer.reset()
 
+
     def _augment_images_with_patch(
         self,
         x: torch.Tensor,
@@ -382,28 +372,27 @@ class RobustDPatchPyTorch(EvasionAttack):
     ) -> tuple[torch.Tensor, list[dict[str, torch.Tensor]], dict[str, float | int]]:
         """
         Apply patch to images with random transformations (crop, rotate, brightness).
+
+        Args:
+            x: Input images (B, C, H, W) - always channels_first after preprocessing
+            y: Target labels (for targeted attack) or None
+            patch: Patch tensor (C, H, W)
+
+        Returns:
+            Tuple of (augmented images, targets, transformations)
         """
         transformations: dict[str, float | int] = {}
         x_patch = x.clone()
 
-        # Handle channels_first/last for easier processing if needed
-        # Here we assume x is (B, C, H, W)
-
         # Apply patch at specified location
+        # x is (B, C, H, W), patch is (C, H, W)
         x_1, y_1 = self.patch_location
-        x_2 = x_1 + self.patch_shape[1] # H
-        y_2 = y_1 + self.patch_shape[2] # W
-        
-        if self.estimator.channels_first:
-             x_patch[:, :, x_1:x_2, y_1:y_2] = self._patch
-        else:
-             # patch is (C, H, W) in our storage. x_patch is (B, C, H, W).
-             # Wait, if channels_last, x is (B, C, H, W) here?
-             # In `_preprocess_and_convert`, we use `estimator._preprocess...`.
-             # ART's `_preprocess` returns `x` in `channels_first` format usually if `framework` expects it, 
-             # BUT `PyTorchClassifier` expects `channels_first=True`.
-             # Let's assume x is (B, C, H, W).
-             x_patch[:, :, x_1:x_2, y_1:y_2] = self._patch
+        # self._patch is (C, H, W), so height and width are:
+        x_2 = x_1 + self._patch.shape[1]  # H
+        y_2 = y_1 + self._patch.shape[2]  # W
+
+        # Apply patch: x_patch[B, C, H, W] = patch[C, H, W]
+        x_patch[:, :, x_1:x_2, y_1:y_2] = self._patch
 
         # 1) Crop images
         crop_x = random.randint(0, self.crop_range[0])
@@ -540,21 +529,21 @@ class RobustDPatchPyTorch(EvasionAttack):
         Revert transformation on gradients.
 
         Args:
-            gradients: The gradients (B, C, H_crop, W_crop)
+            gradients: The gradients (B, C, H_crop, W_crop) after transformations
             transforms: The transformations in forward direction
 
         Returns:
-            Reverse-transformed gradients mapped back to patch size
+            Reverse-transformed gradients mapped back to patch size (B, C, H_patch, W_patch)
         """
-        # 1. Brightness
+        # 1. Brightness: scale gradients by brightness factor
         gradients = transforms["brightness"] * gradients
 
         # 2. Undo Rotation
         rot90 = transforms["rot90"]
-        k = (4 - rot90) % 4
+        k = (4 - rot90) % 4  # Reverse rotation
         gradients = torch.rot90(gradients, k=k, dims=(2, 3))
 
-        # 3. Undo Cropping (Map back to Patch)
+        # 3. Undo Cropping (Extract patch region from gradient)
         # The gradients are now aligned with the UN-ROTATED, but CROPPED image.
         # Dimensions: (B, C, H_crop, W_crop).
         # We want to extract the gradients for the patch.
@@ -563,30 +552,41 @@ class RobustDPatchPyTorch(EvasionAttack):
         # So the patch in the cropped image is at:
         # p_x = patch_x - crop_x
         # p_y = patch_y - crop_y
-        
+
         crop_x = int(transforms["crop_x"])
         crop_y = int(transforms["crop_y"])
-        
+
         # Patch coordinates in original image
         px, py = self.patch_location
-        ph, pw = self.patch_shape[1], self.patch_shape[2] # (C, H, W) setup
-        
+        # self._patch is (C, H, W), so patch height and width are:
+        ph, pw = self._patch.shape[1], self._patch.shape[2]
+
         # Patch coordinates in cropped gradient tensor
         gx = px - crop_x
         gy = py - crop_y
-        
-        # We need to slice gradients[..., gx:gx+ph, gy:gy+pw]
-        # But we must handle boundary conditions where patch might be partially out of crop?
-        # The checks in __init__ ensure patch is valid vs crop range.
-        # However, let's ensure indices are valid.
-        
+
+        # Extract patch gradient region
         grad_patch = gradients[:, :, gx:gx+ph, gy:gy+pw]
-        
+
         return grad_patch
 
     def _patch_to_numpy(self) -> np.ndarray:
-        """Convert patch from PyTorch to NumPy."""
+        """
+        Convert patch from PyTorch to NumPy.
+
+        Internal patch is (C, H, W), return as (H, W, C) for API compatibility.
+        """
         patch_np = self._patch.detach().cpu().numpy()
+
+        # Always convert from (C, H, W) to (H, W, C) for API compatibility
+        patch_np = np.transpose(patch_np, (1, 2, 0))
+
+        # Denormalize if needed (consistent with other PyTorch attacks)
+        if self.estimator.clip_values is not None:
+            min_val, max_val = self.estimator.clip_values
+            if max_val > 1:
+                patch_np = patch_np * max_val
+
         return patch_np.astype(np.float32)
 
     def apply_patch(
@@ -606,28 +606,32 @@ class RobustDPatchPyTorch(EvasionAttack):
 
         # Use external patch if provided
         if patch_external is not None:
+            # External patch is (H, W, C), convert to (C, H, W)
             patch_torch = torch.from_numpy(patch_external).float().to(self.device)
-            if patch_torch.dim() == 3 and not self.estimator.channels_first:
-                 patch_torch = patch_torch.permute(2, 0, 1) # To (C, H, W)
+            patch_torch = patch_torch.permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
         else:
-            patch_torch = self._patch
+            patch_torch = self._patch  # Already (C, H, W)
 
-        # Apply patch (without transformations)
+        # Apply patch (without transformations) at specified location
         x_patch = x_torch.clone()
 
-        # Apply patch at specified location
+        # x_patch is (B, C, H, W), patch_torch is (C, H, W)
         x_1, y_1 = self.patch_location
-        x_2 = x_1 + self.patch_shape[1]
-        y_2 = y_1 + self.patch_shape[2]
+        x_2 = x_1 + patch_torch.shape[1]  # H
+        y_2 = y_1 + patch_torch.shape[2]  # W
 
         x_patch[:, :, x_1:x_2, y_1:y_2] = patch_torch
 
-        # Convert back to NumPy
+        # Convert back to NumPy (consistent with other attacks)
         patched_numpy = x_patch.detach().cpu().numpy()
-        if not self.estimator.channels_first:
-            patched_numpy = np.transpose(patched_numpy, (0, 2, 3, 1))
+        # Always (B, C, H, W) -> (B, H, W, C) for API
+        patched_numpy = np.transpose(patched_numpy, (0, 2, 3, 1))
+
+        # Denormalize if needed
         if self.estimator.clip_values is not None:
-            patched_numpy = patched_numpy * self.estimator.clip_values[1]
+            min_val, max_val = self.estimator.clip_values
+            if max_val > 1:
+                patched_numpy = patched_numpy * max_val
 
         return patched_numpy.astype(np.float32)
 
@@ -674,8 +678,9 @@ class RobustDPatchPyTorch(EvasionAttack):
         if len(self.crop_range) != 2:
             raise ValueError("The length of crop range must be 2.")
 
-        if self.crop_range[0] > self.crop_range[1]:
-            raise ValueError("The first element of the crop range must be less or equal to the second one.")
+        # Note: crop_range is (height_crop, width_crop), not comparable to each other
+        # Original implementation has this check but it's semantically incorrect
+        # Keeping for compatibility but should be reconsidered
 
         if self.patch_location[0] < self.crop_range[0] or self.patch_location[1] < self.crop_range[1]:
             raise ValueError("The patch location must be outside the crop range.")

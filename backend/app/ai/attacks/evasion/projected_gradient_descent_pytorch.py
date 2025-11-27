@@ -35,10 +35,8 @@ from app.ai.config import ART_NUMPY_DTYPE
 from app.ai.summary_writer import SummaryWriter
 from app.ai.estimators.estimator import BaseEstimator, LossGradientsMixin
 from app.ai.estimators.classification.classifier import ClassifierMixin
-from app.ai.attacks.evasion.projected_gradient_descent.projected_gradient_descent_numpy import (
-    ProjectedGradientDescentCommon,
-)
-from app.ai.utils import compute_success, random_sphere, compute_success_array
+from app.ai.attacks.attack import EvasionAttack
+from app.ai.utils import compute_success, random_sphere, compute_success_array, get_labels_np_array, check_and_transform_label_format
 
 if TYPE_CHECKING:
 
@@ -48,7 +46,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ProjectedGradientDescentPyTorch(ProjectedGradientDescentCommon):
+class ProjectedGradientDescentPyTorch(EvasionAttack):
     """
     The Projected Gradient Descent attack is an iterative method in which, after each iteration, the perturbation is
     projected on a lp-ball of specified radius (in addition to clipping the values of the adversarial sample so that it
@@ -57,6 +55,19 @@ class ProjectedGradientDescentPyTorch(ProjectedGradientDescentCommon):
     | Paper link: https://arxiv.org/abs/1706.06083
     """
 
+    attack_params = EvasionAttack.attack_params + [
+        "norm",
+        "eps",
+        "eps_step",
+        "decay",
+        "max_iter",
+        "targeted",
+        "num_random_init",
+        "batch_size",
+        "random_eps",
+        "summary_writer",
+        "verbose",
+    ]
     _estimator_requirements = (BaseEstimator, LossGradientsMixin, ClassifierMixin)  # type: ignore
 
     def __init__(
@@ -109,20 +120,22 @@ class ProjectedGradientDescentPyTorch(ProjectedGradientDescentCommon):
         if summary_writer and num_random_init > 1:
             raise ValueError("TensorBoard is not yet supported for more than 1 random restart (num_random_init>1).")
 
-        super().__init__(
-            estimator=estimator,
-            norm=norm,
-            eps=eps,
-            eps_step=eps_step,
-            decay=decay,
-            max_iter=max_iter,
-            targeted=targeted,
-            num_random_init=num_random_init,
-            batch_size=batch_size,
-            random_eps=random_eps,
-            verbose=verbose,
-            summary_writer=summary_writer,
-        )
+        super().__init__(estimator=estimator, summary_writer=summary_writer)
+
+        # Set attack parameters
+        self.norm = norm
+        self.eps = eps
+        self.eps_step = eps_step
+        self.decay = decay
+        self.max_iter = max_iter
+        self.targeted = targeted
+        self.num_random_init = num_random_init
+        self.batch_size = batch_size
+        self.random_eps = random_eps
+        self.verbose = verbose
+
+        # Validate parameters
+        self._check_params()
 
         self._batch_id = 0
         self._i_max_iter = 0
@@ -517,3 +530,87 @@ class ProjectedGradientDescentPyTorch(ProjectedGradientDescentCommon):
         values = values_tmp.reshape(values.shape).to(values.dtype)
 
         return values
+
+    def _set_targets(self, x: np.ndarray, y: np.ndarray | None) -> np.ndarray:
+        """
+        Check and set up targets.
+
+        :param x: An array with the original inputs.
+        :param y: Target values (class labels) one-hot-encoded of shape `(nb_samples, nb_classes)` or indices of shape
+                  (nb_samples,). Only provide this parameter if you'd like to use true labels when crafting adversarial
+                  samples. Otherwise, model predictions are used as labels to avoid the "label leaking" effect
+                  (explained in this paper: https://arxiv.org/abs/1611.01236). Default is `None`.
+        :return: The targets.
+        """
+        if y is not None:
+            y = check_and_transform_label_format(y, nb_classes=self.estimator.nb_classes)
+
+        if y is None:
+            # Throw error if attack is targeted, but no targets are provided
+            if self.targeted:
+                raise ValueError("Target labels `y` need to be provided for a targeted attack.")
+
+            # Use model predictions as correct outputs
+            targets = get_labels_np_array(self.estimator.predict(x, batch_size=self.batch_size))
+        else:
+            targets = y
+
+        return targets
+
+    def _check_params(self) -> None:
+        """Validate attack parameters."""
+        norm: float = np.inf if self.norm == "inf" else float(self.norm)
+        if norm < 1:
+            raise ValueError('Norm order must be either "inf", `np.inf` or a real `p >= 1`.')
+
+        if not (
+            isinstance(self.eps, (int, float))
+            and isinstance(self.eps_step, (int, float))
+            or isinstance(self.eps, np.ndarray)
+            and isinstance(self.eps_step, np.ndarray)
+        ):
+            raise TypeError(
+                "The perturbation size `eps` and the perturbation step-size `eps_step` must have the same type of `int`"
+                ", `float`, or `np.ndarray`."
+            )
+
+        if isinstance(self.eps, (int, float)):
+            if self.eps < 0:
+                raise ValueError("The perturbation size `eps` has to be non-negative.")
+        else:
+            if (self.eps < 0).any():
+                raise ValueError("The perturbation size `eps` has to be non-negative.")
+
+        if isinstance(self.eps_step, (int, float)):
+            if self.eps_step <= 0:
+                raise ValueError("The perturbation step-size `eps_step` has to be positive.")
+        else:
+            if (self.eps_step <= 0).any():
+                raise ValueError("The perturbation step-size `eps_step` has to be positive.")
+
+        if isinstance(self.eps, np.ndarray) and isinstance(self.eps_step, np.ndarray):
+            if self.eps.shape != self.eps_step.shape:
+                raise ValueError(
+                    "The perturbation size `eps` and the perturbation step-size `eps_step` must have the same shape."
+                )
+
+        if not isinstance(self.targeted, bool):
+            raise ValueError("The flag `targeted` has to be of type bool.")
+
+        if not isinstance(self.num_random_init, int):
+            raise TypeError("The number of random initialisations has to be of type integer.")
+
+        if self.num_random_init < 0:
+            raise ValueError("The number of random initialisations `random_init` has to be greater than or equal to 0.")
+
+        if self.batch_size <= 0:
+            raise ValueError("The batch size `batch_size` has to be positive.")
+
+        if self.max_iter < 0:
+            raise ValueError("The number of iterations `max_iter` has to be a non-negative integer.")
+
+        if self.decay is not None and self.decay < 0.0:
+            raise ValueError("The decay factor `decay` has to be a nonnegative float.")
+
+        if not isinstance(self.verbose, bool):
+            raise ValueError("The verbose has to be a Boolean.")
