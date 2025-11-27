@@ -166,8 +166,9 @@ class RobustDPatchPyTorch(EvasionAttack):
         :return: Adversarial patch (NumPy array).
         """
         # Validate inputs
+        # patch_shape is always (H, W, C) format, so channel is at index 2
         channel_index = 1 if self.estimator.channels_first else x.ndim - 1
-        if x.shape[channel_index] != self.patch_shape[channel_index - 1]:
+        if x.shape[channel_index] != self.patch_shape[2]:
             raise ValueError("The color channel index of the images and the patch have to be identical.")
         if y is None and self.targeted:
             raise ValueError("The targeted version of RobustDPatch attack requires target labels provided to `y`.")
@@ -188,7 +189,8 @@ class RobustDPatchPyTorch(EvasionAttack):
             y = convert_tf_to_pt(y=y, height=x.shape[1], width=x.shape[2])
 
         # Validate patch location
-        if y is not None:
+        # Only validate crop_range if it's not (0, 0) - no cropping means no intersection issues
+        if y is not None and (self.crop_range[0] > 0 or self.crop_range[1] > 0):
             for i_image in range(x.shape[0]):
                 y_i = y[i_image]["boxes"]
                 for i_box in range(y_i.shape[0]):
@@ -574,12 +576,12 @@ class RobustDPatchPyTorch(EvasionAttack):
         """
         Convert patch from PyTorch to NumPy.
 
-        Internal patch is (C, H, W), return as (H, W, C) for API compatibility.
+        Internal patch is (C, H, W), return as (C, H, W) for consistency with other PyTorch attacks.
         """
         patch_np = self._patch.detach().cpu().numpy()
 
-        # Always convert from (C, H, W) to (H, W, C) for API compatibility
-        patch_np = np.transpose(patch_np, (1, 2, 0))
+        # Return in (C, H, W) format for consistency with AdversarialPatchPyTorch
+        # patch_service.py will handle conversion to (H, W, C) for saving
 
         # Denormalize if needed (consistent with other PyTorch attacks)
         if self.estimator.clip_values is not None:

@@ -48,7 +48,6 @@ interface AIModel {
   id: string
   name: string
   type: string
-  version: string
   framework: string
   status: 'loaded' | 'unloaded'
   is_loaded: boolean
@@ -77,9 +76,9 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
   const [configFile, setConfigFile] = useState<File | null>(null)
   const [autoDetectedInfo, setAutoDetectedInfo] = useState<AutoDetectedMetadata | null>(null)
   const [modelName, setModelName] = useState<string>('')
-  const [modelVersion, setModelVersion] = useState<string>('1.0.0')
   const [modelDescription, setModelDescription] = useState<string>('')
   const [isUploading, setIsUploading] = useState(false)
+  const [isCompleted, setIsCompleted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -87,6 +86,10 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
     const file = e.target.files?.[0]
     if (file) {
       setWeightsFile(file)
+      setAutoDetectedInfo(null) // 새 파일 선택 시 이전 자동 감지 정보 초기화
+      setError(null) // 에러 초기화
+      setSuccess(null) // 성공 메시지 초기화
+      setIsCompleted(false) // 완료 상태 초기화
     }
   }
 
@@ -94,6 +97,10 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
     const file = e.target.files?.[0]
     if (file) {
       setConfigFile(file)
+      setAutoDetectedInfo(null) // 새 파일 선택 시 이전 자동 감지 정보 초기화
+      setError(null) // 에러 초기화
+      setSuccess(null) // 성공 메시지 초기화
+      setIsCompleted(false) // 완료 상태 초기화
     }
   }
 
@@ -131,12 +138,11 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
       const formData = new FormData()
       formData.append('weights_file', weightsFile)
       if (configFile) {
-        formData.append('yaml_file', configFile) // Backend still expects 'yaml_file' param
+        formData.append('yaml_file', configFile)
       }
 
       // Add manual settings
-      formData.append('name', modelName)  // Required
-      if (modelVersion) formData.append('version', modelVersion)
+      formData.append('name', modelName)
       if (modelDescription) formData.append('description', modelDescription)
 
       const response = await fetch('/api/models/upload', {
@@ -162,17 +168,11 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
       }
       setAutoDetectedInfo(metadata)
 
-      setSuccess(`모델 "${data.name}" v${data.version}이 성공적으로 업로드되었습니다`)
+      setSuccess(`모델 "${data.name}"이 성공적으로 업로드되었습니다`)
+      setIsCompleted(true) // 업로드 완료 상태로 설정
 
-      setTimeout(() => {
-        setWeightsFile(null)
-        setConfigFile(null)
-        setModelName('')
-        setModelVersion('1.0.0')
-        setModelDescription('')
-        setAutoDetectedInfo(null)
-        onSuccess?.()
-      }, 2000)
+      // 폼 초기화는 하지 않고 모델 목록 새로고침만 수행
+      onSuccess?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다')
     } finally {
@@ -182,130 +182,78 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
 
   return (
     <div className="space-y-6">
-      {error && (
-        <Alert variant="destructive" className="bg-red-900/20 border-red-500/30">
-          <XCircle className="h-4 w-4 text-red-400" />
-          <AlertDescription className="text-red-300">{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {success && !error && (
-        <Alert className="bg-green-900/20 border-green-500/30">
-          <CheckCircle2 className="h-4 w-4 text-green-400" />
-          <AlertDescription className="text-green-300">{success}</AlertDescription>
-        </Alert>
-      )}
-
       <div className="grid gap-6">
-        {/* File Upload Section */}
-        <div className="space-y-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="weights-file" className="text-white">
-                모델 가중치 (.pt) <span className="text-red-400">*</span>
-              </Label>
-              <Input
-                id="weights-file"
-                type="file"
-                accept=".pt,.pth"
-                onChange={handleWeightsFileChange}
-                className="bg-slate-700/50 border-white/10 text-white"
-              />
-              {weightsFile && (
-                <p className="text-sm text-green-400">✓ {weightsFile.name}</p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="config-file" className="text-white">
-                Config 파일 
-              </Label>
-              <Input
-                id="config-file"
-                type="file"
-                accept=".yaml,.yml,.py"
-                onChange={handleConfigFileChange}
-                className="bg-slate-700/50 border-white/10 text-white"
-              />
-              {configFile && (
-                <p className="text-sm text-green-400">✓ {configFile.name}</p>
-              )}
-            </div>
-          </div>
-
-          {/* Auto-detected info display */}
-          {autoDetectedInfo && (
-            <Alert className="bg-green-900/20 border-green-500/30">
-              <CheckCircle2 className="h-4 w-4 text-green-400" />
-              <AlertDescription className="text-green-300">
-                <div className="font-semibold mb-2">자동 감지된 정보</div>
-                <div className="space-y-1 text-sm">
-                  {autoDetectedInfo.framework && (
-                    <div>프레임워크: {autoDetectedInfo.framework}</div>
-                  )}
-                  {autoDetectedInfo.model_type && (
-                    <div>모델 타입: {autoDetectedInfo.model_type.toUpperCase()}</div>
-                  )}
-                  {autoDetectedInfo.num_classes && (
-                    <div>클래스 수: {autoDetectedInfo.num_classes}</div>
-                  )}
-                  {autoDetectedInfo.input_size && (
-                    <div>입력 크기: {JSON.stringify(autoDetectedInfo.input_size)}</div>
-                  )}
-                </div>
-              </AlertDescription>
-            </Alert>
-          )}
+        {/* Model Name */}
+        <div className="space-y-2">
+          <Label htmlFor="model-name" className="text-white">
+            모델 이름 <span className="text-red-400">*</span>
+          </Label>
+          <Input
+            id="model-name"
+            value={modelName}
+            onChange={(e) => handleModelNameChange(e.target.value)}
+            placeholder="예: yolov8_person_detector"
+            className="bg-slate-700/50 border-white/10 text-white"
+            required
+            disabled={isUploading || isCompleted}
+          />
+          <p className="text-xs text-slate-400 mt-1">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
         </div>
 
-        {/* Model Information Section */}
-        <div className="border border-white/10 rounded-lg p-4 space-y-4">
-          <h3 className="font-semibold text-white">모델 정보 <span className="text-red-400">*</span></h3>
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="model-name" className="text-white">
-                모델 이름 <span className="text-red-400">*</span>
-              </Label>
-              <Input
-                id="model-name"
-                value={modelName}
-                onChange={(e) => handleModelNameChange(e.target.value)}
-                placeholder="예: yolov8_person_detector"
-                className="bg-slate-700/50 border-white/10 text-white"
-                required
-              />
-              <p className="text-xs text-slate-400 mt-1">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="model-version" className="text-white">버전</Label>
-                <Input
-                  id="model-version"
-                  value={modelVersion}
-                  onChange={(e) => setModelVersion(e.target.value)}
-                  placeholder="1.0.0"
-                  className="bg-slate-700/50 border-white/10 text-white"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="model-description" className="text-white">설명</Label>
-              <Textarea
-                id="model-description"
-                value={modelDescription}
-                onChange={(e) => setModelDescription(e.target.value)}
-                placeholder="모델 설명 (선택)"
-                rows={2}
-                className="bg-slate-700/50 border-white/10 text-white"
-              />
-            </div>
+        {/* File Upload Section */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="weights-file" className="text-white">
+              모델 가중치 (.pt) <span className="text-red-400">*</span>
+            </Label>
+            <Input
+              id="weights-file"
+              type="file"
+              accept=".pt,.pth"
+              onChange={handleWeightsFileChange}
+              className="bg-slate-700/50 border-white/10 text-white"
+              disabled={isUploading || isCompleted}
+            />
+            {weightsFile && (
+              <p className="text-sm text-green-400">✓ {weightsFile.name}</p>
+            )}
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="config-file" className="text-white">
+              Config 파일
+            </Label>
+            <Input
+              id="config-file"
+              type="file"
+              accept=".yaml,.yml,.py"
+              onChange={handleConfigFileChange}
+              className="bg-slate-700/50 border-white/10 text-white"
+              disabled={isUploading || isCompleted}
+            />
+            {configFile && (
+              <p className="text-sm text-green-400">✓ {configFile.name}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Description */}
+        <div className="space-y-2">
+          <Label htmlFor="model-description" className="text-white">설명</Label>
+          <Textarea
+            id="model-description"
+            value={modelDescription}
+            onChange={(e) => setModelDescription(e.target.value)}
+            placeholder="모델 설명 (선택)"
+            rows={2}
+            className="bg-slate-700/50 border-white/10 text-white"
+            disabled={isUploading || isCompleted}
+          />
         </div>
 
         <Button
           onClick={uploadModel}
-          disabled={isUploading || !weightsFile}
+          disabled={isUploading || isCompleted || !weightsFile}
           className="w-full bg-blue-600 hover:bg-blue-700 text-white"
           size="lg"
         >
@@ -321,6 +269,45 @@ function SimpleModelUploadContent({ onSuccess }: { onSuccess?: () => void }) {
             </>
           )}
         </Button>
+
+        {/* Auto-detected info display */}
+        {autoDetectedInfo && (
+          <Alert className="bg-green-900/20 border-green-500/30">
+            <CheckCircle2 className="h-4 w-4 text-green-400" />
+            <AlertDescription className="text-green-300">
+              <div className="font-semibold mb-2">자동 감지된 정보</div>
+              <div className="space-y-1 text-sm">
+                {autoDetectedInfo.framework && (
+                  <div>프레임워크: {autoDetectedInfo.framework}</div>
+                )}
+                {autoDetectedInfo.model_type && (
+                  <div>모델 타입: {autoDetectedInfo.model_type.toUpperCase()}</div>
+                )}
+                {autoDetectedInfo.num_classes && (
+                  <div>클래스 수: {autoDetectedInfo.num_classes}</div>
+                )}
+                {autoDetectedInfo.input_size && (
+                  <div>입력 크기: {JSON.stringify(autoDetectedInfo.input_size)}</div>
+                )}
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Error/Success Messages */}
+        {error && (
+          <Alert variant="destructive" className="bg-red-900/20 border-red-500/30">
+            <XCircle className="h-4 w-4 text-red-400" />
+            <AlertDescription className="text-red-300">{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {success && !error && (
+          <Alert className="bg-green-900/20 border-green-500/30">
+            <CheckCircle2 className="h-4 w-4 text-green-400" />
+            <AlertDescription className="text-green-300">{success}</AlertDescription>
+          </Alert>
+        )}
       </div>
     </div>
   )
@@ -345,7 +332,6 @@ export function AIModelManagement() {
     id: model.id,
     name: model.name,
     type: model.task === 'object-detection' ? '객체탐지' : '분류',
-    version: model.version,
     framework: model.framework,
     status: 'unloaded' as const,
     is_loaded: false,
@@ -428,7 +414,7 @@ export function AIModelManagement() {
 
       // Get filename from Content-Disposition header
       const contentDisposition = response.headers.get('content-disposition')
-      let filename = `${model.name}_v${model.version}.zip`
+      let filename = `${model.name}.zip`
 
       if (contentDisposition) {
         const match = contentDisposition.match(/filename="?(.+?)"?$/)
@@ -484,33 +470,6 @@ export function AIModelManagement() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card className="bg-gradient-to-br from-blue-900/20 to-blue-800/20 border-blue-700/30">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Brain className="w-5 h-5" />
-              전체 모델
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{models.length}</div>
-            <p className="text-sm text-muted-foreground">등록된 AI 모델</p>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-green-900/20 to-green-800/20 border-green-700/30">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">로드된 모델</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">
-              {models.filter(m => m.is_loaded).length}
-            </div>
-            <p className="text-sm text-muted-foreground">메모리에 로드된 모델</p>
-          </CardContent>
-        </Card>
-      </div>
-
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
@@ -592,7 +551,6 @@ export function AIModelManagement() {
                     <TableCell>{model.type}</TableCell>
                     <TableCell>
                       <span className="font-medium">{model.framework}</span>
-                      <span className="text-xs text-muted-foreground ml-2">v{model.version}</span>
                     </TableCell>
                     <TableCell>{model.lastUpdated}</TableCell>
                     <TableCell className="text-right">
@@ -638,7 +596,7 @@ export function AIModelManagement() {
           <DialogHeader>
             <DialogTitle>모델 테스트 추론</DialogTitle>
             <DialogDescription>
-              {selectedModel ? `${selectedModel.name} v${selectedModel.version}` : '모델을 테스트합니다'}
+              {selectedModel ? `${selectedModel.name}` : '모델을 테스트합니다'}
             </DialogDescription>
           </DialogHeader>
 
@@ -848,7 +806,7 @@ export function AIModelManagement() {
           <AlertDialogHeader>
             <AlertDialogTitle>모델 삭제 확인</AlertDialogTitle>
             <AlertDialogDescription>
-              정말로 <strong>{modelToDelete?.name} v{modelToDelete?.version}</strong> 모델을 삭제하시겠습니까?
+              정말로 <strong>{modelToDelete?.name}</strong> 모델을 삭제하시겠습니까?
               <br /><br />
               이 작업은 다음을 수행합니다:
               <ul className="list-disc list-inside mt-2 space-y-1">

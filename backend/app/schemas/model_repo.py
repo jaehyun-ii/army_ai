@@ -17,8 +17,7 @@ class ODModelBase(BaseModel):
     name: str
     task: str = "object-detection"
     description: Optional[str] = None
-    # Merged version fields
-    version: str
+    # Model metadata
     framework: ModelFramework
     framework_version: Optional[str] = None
     input_spec: Optional[Dict[str, Any]] = None

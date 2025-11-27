@@ -126,8 +126,8 @@ class PatchService:
             await sse_logger.info(f"타겟 클래스: {target_class} (ID: {target_class_id})")
 
             # Load estimator using real ART library
-            # For DPatch/RobustDPatch, we need channels_first=False
-            channels_first = (attack_method == "patch")  # True for AdversarialPatchPyTorch, False for DPatch/RobustDPatch
+            # All PyTorch-based attacks use NCHW format internally
+            channels_first = True  # Always use NCHW for PyTorch models
             estimator, input_size = await self._load_art_estimator(db, model_id, channels_first=channels_first)
             await sse_logger.info("모델 로딩 완료")
 
@@ -158,8 +158,7 @@ class PatchService:
 
             # Step 3: Prepare training data (resize all images to model input size)
             await sse_logger.status("이미지 전처리 중...")
-            x_train_list_hwc = []  # For DPatch/RobustDPatch (HWC format)
-            x_train_list_chw = []  # For AdversarialPatchPyTorch (CHW format)
+            x_train_list_chw = []  # All PyTorch attacks use CHW format
 
             for img_data in training_images:
                 img = img_data["image"]  # (H, W, C) RGB
@@ -171,16 +170,11 @@ class PatchService:
                     img_pil = img_pil.resize((model_width, model_height), Image.BICUBIC)
                     img = np.array(img_pil).astype(np.float32)
 
-                # Store both formats
-                x_train_list_hwc.append(img)  # (H, W, C) for DPatch/RobustDPatch
-                x_train_list_chw.append(img.transpose(2, 0, 1))  # (C, H, W) for AdversarialPatchPyTorch
+                # Convert to CHW format for PyTorch
+                x_train_list_chw.append(img.transpose(2, 0, 1))  # (C, H, W)
 
-            # Prepare data based on attack method
-            # AdversarialPatchPyTorch expects NCHW, DPatch/RobustDPatch expect NHWC
-            if attack_method == "patch":
-                x_train = np.ascontiguousarray(np.stack(x_train_list_chw, axis=0).astype(np.float32))  # (N, C, H, W)
-            else:  # dpatch or robust_dpatch
-                x_train = np.ascontiguousarray(np.stack(x_train_list_hwc, axis=0).astype(np.float32))  # (N, H, W, C)
+            # Prepare data in NCHW format for all PyTorch-based attacks
+            x_train = np.ascontiguousarray(np.stack(x_train_list_chw, axis=0).astype(np.float32))  # (N, C, H, W)
 
             await sse_logger.info(f"학습 데이터 준비 완료: {x_train.shape}")
 
@@ -361,8 +355,8 @@ class PatchService:
                 result = await future
 
             # Handle different return types
-            # AdversarialPatchPyTorch returns (patch, mask) tuple
-            # DPatch and RobustDPatch return patch only
+            # AdversarialPatchPyTorch returns (patch, mask) tuple, others return patch only
+            # All patches are in CHW format
             if isinstance(result, tuple):
                 patch = result[0]  # Extract patch from tuple
                 logger.info(f"Patch generated as tuple, extracted patch with shape: {patch.shape}")
@@ -375,12 +369,8 @@ class PatchService:
             await sse_logger.status("패치 파일 저장 중...")
 
             # Convert patch to image format
-            # AdversarialPatchPyTorch returns CHW, DPatch/RobustDPatch return HWC
-            if attack_method == "patch":
-                # CHW → HWC
-                patch_img = np.transpose(patch, (1, 2, 0))
-            else:
-                patch_img = patch
+            # All PyTorch attacks return CHW, convert to HWC for saving
+            patch_img = np.transpose(patch, (1, 2, 0))  # CHW → HWC
 
             # Clip and convert to uint8
             patch_img = np.clip(patch_img, 0, 255).astype(np.uint8)
@@ -434,6 +424,7 @@ class PatchService:
                 f"패치 생성 완료: shape={patch.shape}",
                 patch_id=str(patch_record.id),
                 file_path=str(patch_path),
+                storage_key=str(patch_path.relative_to(self.storage_root)),
             )
 
             # Send complete event to close SSE stream
@@ -443,6 +434,7 @@ class PatchService:
                     "message": "패치 생성 완료!",
                     "patch_id": str(patch_record.id),
                     "file_path": str(patch_path),
+                    "storage_key": str(patch_path.relative_to(self.storage_root)),
                 })
 
             return schemas.Patch2DResponse.model_validate(patch_record)
@@ -590,7 +582,7 @@ class PatchService:
         Args:
             db: Database session
             model_id: Model ID
-            channels_first: True for NCHW (AdversarialPatchPyTorch), False for NHWC (DPatch/RobustDPatch)
+            channels_first: True for NCHW (all PyTorch attacks)
 
         Returns:
             Tuple of (ART-compatible estimator, input_size)
@@ -662,13 +654,13 @@ class PatchService:
         else:
             logger.info("Using CPU for patch generation (slower)")
 
-        # Configure input shape and channels based on attack method
+        # Configure input shape for PyTorch (always NCHW)
         if channels_first:
-            # AdversarialPatchPyTorch expects NCHW format
+            # All PyTorch-based attacks use NCHW format
             input_shape = (3, *input_size)  # (C, H, W)
             logger.info(f"Creating estimator with channels_first=True (NCHW format)")
         else:
-            # DPatch/RobustDPatch expect NHWC format
+            # Legacy NHWC format (not used for PyTorch attacks)
             input_shape = (*input_size, 3)  # (H, W, C)
             logger.info(f"Creating estimator with channels_first=False (NHWC format)")
 

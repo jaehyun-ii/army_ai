@@ -159,8 +159,9 @@ class DPatchPyTorch(EvasionAttack):
         mask = self._check_mask(mask, x)
 
         # Validate inputs
+        # patch_shape is always (H, W, C) format, so channel is at index 2
         channel_index = 1 if self.estimator.channels_first else x.ndim - 1
-        if x.shape[channel_index] != self.patch_shape[channel_index - 1]:
+        if x.shape[channel_index] != self.patch_shape[2]:
             raise ValueError("The color channel index of the images and the patch have to be identical.")
         if x.ndim != 4:
             raise ValueError("The adversarial patch can only be applied to images.")
@@ -389,12 +390,12 @@ class DPatchPyTorch(EvasionAttack):
         """
         Convert patch from PyTorch to NumPy.
 
-        Internal patch is (C, H, W), return as (H, W, C) for API compatibility.
+        Internal patch is (C, H, W), return as (C, H, W) for consistency with other PyTorch attacks.
         """
         patch_np = self._patch.detach().cpu().numpy()
 
-        # Always convert from (C, H, W) to (H, W, C) for API compatibility
-        patch_np = np.transpose(patch_np, (1, 2, 0))
+        # Return in (C, H, W) format for consistency with AdversarialPatchPyTorch
+        # patch_service.py will handle conversion to (H, W, C) for saving
 
         # Denormalize if needed (consistent with other PyTorch attacks)
         if self.estimator.clip_values is not None:

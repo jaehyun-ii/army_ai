@@ -1211,6 +1211,7 @@ export function DataManagementDB() {
                 }}
                 placeholder="예: COCO_Person_100"
                 className="mt-1 border-slate-800 bg-slate-900/70 text-slate-100 placeholder:text-slate-500"
+                disabled={isUploading}
               />
               <p className="text-xs text-slate-400 mt-1">영문자, 숫자, - (대시), _ (언더스코어)만 사용 가능</p>
             </div>
@@ -1223,6 +1224,7 @@ export function DataManagementDB() {
                   variant="outline"
                   onClick={() => imagesFolderInputRef.current?.click()}
                   className="flex-shrink-0 border-slate-800 bg-slate-900/70 text-slate-200 hover:bg-slate-800"
+                  disabled={isUploading}
                 >
                   <FolderOpen className="w-4 h-4 mr-2" />
                   폴더 선택
@@ -1232,6 +1234,7 @@ export function DataManagementDB() {
                   readOnly
                   placeholder="이미지 폴더를 선택하세요"
                   className="flex-1 border-slate-800 bg-slate-900/50 text-slate-100 placeholder:text-slate-500 font-mono text-sm"
+                  disabled={isUploading}
                 />
               </div>
             </div>
@@ -1250,6 +1253,7 @@ export function DataManagementDB() {
                   variant="outline"
                   onClick={() => labelsFolderInputRef.current?.click()}
                   className="flex-shrink-0 border-slate-800 bg-slate-900/70 text-slate-200 hover:bg-slate-800"
+                  disabled={isUploading}
                 >
                   <FolderOpen className="w-4 h-4 mr-2" />
                   폴더 선택
@@ -1259,6 +1263,7 @@ export function DataManagementDB() {
                   readOnly
                   placeholder="라벨 폴더를 선택하세요"
                   className="flex-1 border-slate-800 bg-slate-900/50 text-slate-100 placeholder:text-slate-500 font-mono text-sm"
+                  disabled={isUploading}
                 />
               </div>
             </div>
@@ -1277,6 +1282,7 @@ export function DataManagementDB() {
                   variant="outline"
                   onClick={() => classesFileInputRef.current?.click()}
                   className="flex-shrink-0 border-slate-800 bg-slate-900/70 text-slate-200 hover:bg-slate-800"
+                  disabled={isUploading}
                 >
                   <FileText className="w-4 h-4 mr-2" />
                   파일 선택
@@ -1286,6 +1292,7 @@ export function DataManagementDB() {
                   readOnly
                   placeholder="classes.txt 파일을 선택하세요"
                   className="flex-1 border-slate-800 bg-slate-900/50 text-slate-100 placeholder:text-slate-500 font-mono text-sm"
+                  disabled={isUploading}
                 />
               </div>
             </div>
@@ -1300,6 +1307,7 @@ export function DataManagementDB() {
                 rows={2}
                 placeholder="데이터셋에 대한 설명을 입력하세요"
                 className="mt-1 border-slate-800 bg-slate-900/70 text-slate-100 placeholder:text-slate-500"
+                disabled={isUploading}
               />
             </div>
 
@@ -1312,7 +1320,7 @@ export function DataManagementDB() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowUploadDialog(false)} className="border-slate-800 text-slate-300">
+            <Button variant="outline" onClick={() => setShowUploadDialog(false)} className="border-slate-800 text-slate-300" disabled={isUploading}>
               취소
             </Button>
             <Button onClick={handleUploadDataset} disabled={isUploading} className="bg-blue-500 text-white hover:bg-blue-600">

@@ -11,12 +11,12 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const datasetId = params.id
-    console.log('[/api/attack-datasets/[id]] GET request - datasetId:', datasetId)
+    const patchId = params.id
+    console.log('[/api/patches/[id]] GET request - patchId:', patchId)
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/attack-datasets/${datasetId}/`,
+      `${BACKEND_API_URL}/api/v1/patches/${patchId}/`,
       {
         method: 'GET',
         headers: {
@@ -27,17 +27,17 @@ export async function GET(
 
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
-      console.error('[/api/attack-datasets/[id]] Backend error:', errorData)
+      console.error('[/api/patches/[id]] Backend error:', errorData)
       return NextResponse.json(
-        { error: errorData.detail || 'Failed to fetch attack dataset' },
+        { error: errorData.detail || 'Failed to fetch patch' },
         { status: backendResponse.status }
       )
     }
 
-    const dataset = await backendResponse.json()
-    return NextResponse.json(dataset)
+    const patch = await backendResponse.json()
+    return NextResponse.json(patch)
   } catch (error) {
-    console.error('[/api/attack-datasets/[id]] Error:', error)
+    console.error('[/api/patches/[id]] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }
@@ -50,12 +50,12 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const datasetId = params.id
-    console.log('[/api/attack-datasets/[id]] DELETE request - datasetId:', datasetId)
+    const patchId = params.id
+    console.log('[/api/patches/[id]] DELETE request - patchId:', patchId)
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/attack-datasets/${datasetId}/`,
+      `${BACKEND_API_URL}/api/v1/patches/${patchId}/`,
       {
         method: 'DELETE',
       }
@@ -63,16 +63,16 @@ export async function DELETE(
 
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
-      console.error('[/api/attack-datasets/[id]] Backend error:', errorData)
+      console.error('[/api/patches/[id]] Backend error:', errorData)
       return NextResponse.json(
-        { error: errorData.detail || 'Failed to delete attack dataset' },
+        { error: errorData.detail || 'Failed to delete patch' },
         { status: backendResponse.status }
       )
     }
 
     return new NextResponse(null, { status: 204 })
   } catch (error) {
-    console.error('[/api/attack-datasets/[id]] Error:', error)
+    console.error('[/api/patches/[id]] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

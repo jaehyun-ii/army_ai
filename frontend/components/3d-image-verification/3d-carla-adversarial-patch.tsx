@@ -13,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
+import { useToast } from "@/hooks/use-toast"
 import {
   Play,
   Pause,
@@ -43,6 +44,11 @@ import {
   Brain,
   Activity
 } from "lucide-react"
+
+interface ModelInfo {
+  id: string
+  name: string
+}
 
 interface CarlaPatchConfig {
   patchName: string
@@ -164,7 +170,32 @@ export function CarlaAdversarialPatchGenerator() {
     }
   ])
 
+  const { toast } = useToast()
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [simulationView, setSimulationView] = useState<string>("initialization")
+
+  // Load available models
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const response = await fetch('/api/models')
+        const data = await response.json()
+        const models = Array.isArray(data) ? data.map((model: any) => ({
+          id: model.id,
+          name: model.name
+        })) : []
+        setAvailableModels(models)
+      } catch (error) {
+        console.error('Failed to load models:', error)
+        toast({
+          variant: "destructive",
+          title: "모델 로딩 실패",
+          description: "모델 목록을 불러오는데 실패했습니다."
+        })
+      }
+    }
+    loadModels()
+  }, [toast])
 
   // CARLA 시뮬레이션 및 패치 생성 시뮬레이션
   useEffect(() => {
@@ -385,7 +416,13 @@ export function CarlaAdversarialPatchGenerator() {
                             <SelectValue placeholder="모델 선택" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="no-model" disabled>등록된 모델이 없습니다</SelectItem>
+                            {availableModels.length > 0 ? (
+                              availableModels.map((model) => (
+                                <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>
+                              ))
+                            ) : (
+                              <SelectItem value="no-model" disabled>등록된 모델이 없습니다</SelectItem>
+                            )}
                           </SelectContent>
                         </Select>
                       </div>

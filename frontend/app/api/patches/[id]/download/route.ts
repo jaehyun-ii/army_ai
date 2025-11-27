@@ -11,11 +11,11 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const datasetId = params.id
-    const backendUrl = `${BACKEND_API_URL}/api/v1/attack-datasets/${datasetId}/download`
+    const patchId = params.id
+    const backendUrl = `${BACKEND_API_URL}/api/v1/patches/${patchId}/download`
 
-    console.log('[/api/attack-datasets/[id]/download] GET request - datasetId:', datasetId)
-    console.log('[/api/attack-datasets/[id]/download] Backend URL:', backendUrl)
+    console.log('[/api/patches/[id]/download] GET request - patchId:', patchId)
+    console.log('[/api/patches/[id]/download] Backend URL:', backendUrl)
 
     // Forward to backend API
     const backendResponse = await fetch(backendUrl, {
@@ -23,15 +23,15 @@ export async function GET(
     })
 
     if (!backendResponse.ok) {
-      console.error('[/api/attack-datasets/[id]/download] Backend error:', backendResponse.status)
+      console.error('[/api/patches/[id]/download] Backend error:', backendResponse.status)
       return NextResponse.json(
-        { error: 'Attack dataset not found' },
+        { error: 'Patch not found' },
         { status: backendResponse.status }
       )
     }
 
     // Get the content type from backend
-    const contentType = backendResponse.headers.get('content-type') || 'application/zip'
+    const contentType = backendResponse.headers.get('content-type') || 'image/png'
 
     // Get the file as buffer
     const fileBuffer = await backendResponse.arrayBuffer()
@@ -41,11 +41,11 @@ export async function GET(
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="attack_dataset_${datasetId}.zip"`,
+        'Content-Disposition': `attachment; filename="patch_${patchId}.png"`,
       },
     })
   } catch (error) {
-    console.error('[/api/attack-datasets/[id]/download] Error:', error)
+    console.error('[/api/patches/[id]/download] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

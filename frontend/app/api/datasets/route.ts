@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/datasets-2d?skip=${skip}&limit=${limit}`,
+      `${BACKEND_API_URL}/api/v1/datasets-2d/?skip=${skip}&limit=${limit}`,
       {
         method: 'GET',
         headers: {
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     console.log('[/api/datasets] POST request - body:', body)
 
     // Forward to backend API
-    const backendResponse = await fetch(`${BACKEND_API_URL}/api/v1/datasets-2d`, {
+    const backendResponse = await fetch(`${BACKEND_API_URL}/api/v1/datasets-2d/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

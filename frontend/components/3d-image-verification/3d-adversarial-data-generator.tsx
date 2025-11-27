@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { useToast } from "@/hooks/use-toast"
 import {
   Play,
   Square,
@@ -45,6 +46,7 @@ interface GenerationStatus {
 }
 
 export function AdversarialDataGenerator3D() {
+  const { toast } = useToast()
   const [config, setConfig] = useState<AttackConfig>({
     attackName: "",
     selectedEnvironment: "",
@@ -83,10 +85,30 @@ export function AdversarialDataGenerator3D() {
     { value: "patch_universal_v1", label: "Universal Attack Patch v1", successRate: 88.9, date: "2024-01-11" }
   ]
 
-  // AI 모델 목록 (실제 등록된 모델만 표시)
-  // TODO: API에서 3D 모델 목록을 불러오도록 구현 필요
-  const targetModels: { value: string; label: string; type: string }[] = []
-  // 하드코딩된 목록 제거됨 - 실제 등록된 모델만 사용
+  const [targetModels, setTargetModels] = useState<{ value: string; label: string; type: string }[]>([])
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const response = await fetch('/api/models')
+        const data = await response.json()
+        const models = Array.isArray(data) ? data.map((model: any) => ({
+          value: model.id,
+          label: model.name,
+          type: model.framework || 'Unknown'
+        })) : []
+        setTargetModels(models)
+      } catch (error) {
+        console.error('Failed to load models:', error)
+        toast({
+          variant: "destructive",
+          title: "모델 로딩 실패",
+          description: "모델 목록을 불러오는데 실패했습니다."
+        })
+      }
+    }
+    loadModels()
+  }, [toast])
 
   // 적대적 공격 실행
   const startAttack = () => {

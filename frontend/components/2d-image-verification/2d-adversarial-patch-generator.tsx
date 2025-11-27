@@ -37,16 +37,20 @@ import {
 import { AdversarialToolLayout } from "@/components/layouts/adversarial-tool-layout"
 import {
   fetchBackendDatasets,
-  fetchYoloModels,
+  // Removed fetchYoloModels import
   startTraining,
   connectPatchGenerationSSE,
   fetchTrainingResult,
   downloadPatch,
   type BackendDataset,
-  type YoloModel,
   type TrainingLog
 } from "@/lib/adversarial-api"
 import { ImageWithBBox } from "@/components/annotations/ImageWithBBox"
+
+interface ModelInfo {
+  id: string
+  name: string
+}
 
 // FastAPI backend URL - Use NEXT_PUBLIC_BACKEND_API_URL environment variable
 const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
@@ -96,7 +100,7 @@ export function AdversarialPatchGeneratorUpdated() {
   const [selectedDataset, setSelectedDataset] = useState<string>("")
   const [availableDatasets, setAvailableDatasets] = useState<Dataset[]>([])
   const [backendDatasets, setBackendDatasets] = useState<BackendDataset[]>([])
-  const [yoloModels, setYoloModels] = useState<YoloModel[]>([])
+  const [yoloModels, setYoloModels] = useState<ModelInfo[]>([])
   const [datasetImages, setDatasetImages] = useState<any[]>([])
   const [loadingImages, setLoadingImages] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string>("")
@@ -155,26 +159,26 @@ export function AdversarialPatchGeneratorUpdated() {
 
       const totalImages = availableDatasets.find(d => d.id === selectedDataset)?.imageCount || 0
 
-      // Extract patch_id and file_path from the completion log
+      // Extract patch_id and storage_key from the completion log
       const patchId = (completionLog as any).patch_id
+      let storageKey = (completionLog as any).storage_key || ''
       const filePath = (completionLog as any).file_path
 
       console.log('[useEffect] Extracted patch_id:', patchId)
+      console.log('[useEffect] Extracted storage_key:', storageKey)
       console.log('[useEffect] Extracted file_path:', filePath)
 
-      if (patchId) {
-        console.log('[useEffect] Using patch_id:', patchId)
-
-        // Extract storage_key from file_path
-        // file_path format: /home/.../storage/patches/filename.png
-        // storage_key format: patches/filename.png
-        let storageKey = ''
-        if (filePath && typeof filePath === 'string') {
-          const match = filePath.match(/storage\/(.+)$/)
-          if (match) {
-            storageKey = match[1]
-          }
+      // Fallback: extract storage_key from file_path if not provided
+      if (!storageKey && filePath && typeof filePath === 'string') {
+        const match = filePath.match(/storage\/(.+)$/)
+        if (match) {
+          storageKey = match[1]
+          console.log('[useEffect] Extracted storage_key from file_path:', storageKey)
         }
+      }
+
+      if (patchId) {
+        console.log('[useEffect] Using patch_id:', patchId, 'storageKey:', storageKey)
 
         // Create patch result immediately with available data
         setGeneratedPatches([{
@@ -394,11 +398,17 @@ export function AdversarialPatchGeneratorUpdated() {
 
   const loadYoloModels = async () => {
     try {
-      const models = await fetchYoloModels()
+      const response = await fetch('/api/models') // Use the consistent API endpoint
+      const data = await response.json()
+
+      const models = Array.isArray(data) ? data.map((model: any) => ({
+        id: model.id,
+        name: model.name || 'Unknown Model'
+      })) : []
       setYoloModels(models)
     } catch (error) {
-      console.error('Failed to load YOLO models:', error)
-      toast.error('YOLO 모델 목록을 불러오는데 실패했습니다')
+      console.error('Failed to load models:', error)
+      toast.error('모델 목록을 불러오는데 실패했습니다')
     }
   }
 
@@ -898,11 +908,10 @@ export function AdversarialPatchGeneratorUpdated() {
             {Array.isArray(yoloModels) && yoloModels.length > 0 ? (
               yoloModels.map(model => (
                 <SelectItem
-                  key={model?.path || model?.name || Math.random().toString()}
-                  value={model?.path || ""}
-                  disabled={!model?.path}
+                  key={model.id}
+                  value={model.id}
                 >
-                  {model?.name || "이름 없는 모델"}
+                  {model.name}
                 </SelectItem>
               ))
             ) : (

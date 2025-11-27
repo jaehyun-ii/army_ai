@@ -8,14 +8,11 @@ const BACKEND_API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_B
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const queryString = searchParams.toString()
-
-    console.log('[/api/attack-datasets] GET request - query:', queryString)
+    console.log('[/api/models/versions] GET request')
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/attack-datasets/?${queryString}`,
+      `${BACKEND_API_URL}/api/v1/models/versions/`,
       {
         method: 'GET',
         headers: {
@@ -26,19 +23,19 @@ export async function GET(request: NextRequest) {
 
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
-      console.error('[/api/attack-datasets] Backend error:', errorData)
+      console.error('[/api/models/versions] Backend error:', errorData)
       return NextResponse.json(
-        { error: errorData.detail || 'Failed to fetch attack datasets' },
+        { error: errorData.detail || 'Failed to fetch model versions' },
         { status: backendResponse.status }
       )
     }
 
-    const datasets = await backendResponse.json()
-    console.log('[/api/attack-datasets] Fetched datasets count:', datasets.length)
+    const versions = await backendResponse.json()
+    console.log('[/api/models/versions] Fetched versions count:', versions.length)
 
-    return NextResponse.json(datasets)
+    return NextResponse.json(versions)
   } catch (error) {
-    console.error('[/api/attack-datasets] Error:', error)
+    console.error('[/api/models/versions] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

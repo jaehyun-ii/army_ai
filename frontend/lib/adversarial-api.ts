@@ -123,7 +123,8 @@ export interface AdversarialDataLog {
 
 export async function fetchBackendDatasets(): Promise<BackendDataset[]> {
   try {
-    const endpoint = `${BACKEND_API_URL}${API_V1}/datasets-2d`
+    // Use Next.js proxy instead of direct backend call
+    const endpoint = `/api/datasets?type=2D_IMAGE`
     const response = await fetch(endpoint)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -138,7 +139,8 @@ export async function fetchBackendDatasets(): Promise<BackendDataset[]> {
 
 export async function fetchYoloModels(): Promise<YoloModel[]> {
   try {
-    const endpoint = `${BACKEND_API_URL}${API_V1}/models/versions`
+    // Use Next.js proxy instead of direct backend call
+    const endpoint = `/api/models/versions`
     const response = await fetch(endpoint)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -160,8 +162,8 @@ export async function fetchYoloModels(): Promise<YoloModel[]> {
 
 export async function startTraining(config: TrainingConfig): Promise<TrainingResponse> {
   try {
-    // Updated endpoint to match backend test files
-    const endpoint = `${BACKEND_API_URL}${API_V1}/patches/generate`
+    // Use Next.js proxy (no timeout configured for long-running operations)
+    const endpoint = `/api/patches/generate`
 
     // CRITICAL FIX: Use the pre-generated session_id from config instead of generating a new one
     const sessionId = config.session_id
@@ -211,8 +213,8 @@ export async function startTraining(config: TrainingConfig): Promise<TrainingRes
 
 export async function fetchTrainingResult(trainingId: number | string): Promise<TrainingResult> {
   try {
-    // Fixed: Use correct backend endpoint
-    const endpoint = `${BACKEND_API_URL}${API_V1}/patches/${trainingId}`
+    // Use Next.js proxy
+    const endpoint = `/api/patches/${trainingId}`
     const response = await fetch(endpoint)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -304,10 +306,10 @@ export function connectPatchGenerationSSE(sessionId: string, callbacks: {
 
 export async function downloadPatch(trainingId: number | string, patchName?: string, storageKey?: string): Promise<void> {
   try {
-    // Fixed: Use correct backend endpoint
+    // Use Next.js proxy for storage access
     const endpoint = storageKey
-      ? `${BACKEND_API_URL}${API_V1}/storage/${storageKey}`
-      : `${BACKEND_API_URL}${API_V1}/patches/${trainingId}/download`
+      ? `/api/storage/${storageKey}`
+      : `/api/patches/${trainingId}/download`
 
     const response = await fetch(endpoint)
     if (!response.ok) {
@@ -335,8 +337,8 @@ export async function startAdversarialDataGeneration(config: AdversarialDataConf
     let requestBody: any = {}
 
     if (config.attack_type === 'patch') {
-      // Adversarial Patch 적용 - Updated to match test_patch_only.py
-      endpoint = `${BACKEND_API_URL}${API_V1}/attack-datasets/patch`
+      // Adversarial Patch 적용 - Use Next.js proxy (no timeout)
+      endpoint = `/api/attack-datasets/patch`
       requestBody = {
         attack_name: config.dataset_name,
         patch_id: config.training_id,
@@ -345,8 +347,8 @@ export async function startAdversarialDataGeneration(config: AdversarialDataConf
         session_id: config.session_id  // Added for SSE support
       }
     } else if (config.attack_type === 'noise') {
-      // Noise Attack 적용 - Updated to match test_noise_only.py
-      endpoint = `${BACKEND_API_URL}${API_V1}/attack-datasets/noise`
+      // Noise Attack 적용 - Use Next.js proxy (no timeout)
+      endpoint = `/api/attack-datasets/noise`
       requestBody = {
         attack_name: config.dataset_name,
         attack_method: config.noise_method || "pgd", // or "fgsm"
@@ -461,8 +463,8 @@ export async function fetchAdversarialDatasetImages(datasetId: string, limit: nu
 
 export async function downloadAdversarialDataset(datasetId: string, datasetName?: string): Promise<void> {
   try {
-    // Fixed: Use correct backend endpoint
-    const endpoint = `${BACKEND_API_URL}${API_V1}/attack-datasets/${datasetId}/download`
+    // Use Next.js proxy
+    const endpoint = `/api/attack-datasets/${datasetId}/download`
     const response = await fetch(endpoint)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -574,7 +576,8 @@ export async function fetchPatches(params?: {
     if (params?.limit !== undefined) queryParams.append('limit', params.limit.toString())
     if (params?.target_class) queryParams.append('target_class', params.target_class)
 
-    const endpoint = `${BACKEND_API_URL}${API_V1}/patches?${queryParams.toString()}`
+    // Use Next.js proxy
+    const endpoint = `/api/patches?${queryParams.toString()}`
     const response = await fetch(endpoint)
 
     if (!response.ok) {
@@ -591,7 +594,8 @@ export async function fetchPatches(params?: {
 
 export async function fetchPatch(patchId: string): Promise<PatchAsset> {
   try {
-    const endpoint = `${BACKEND_API_URL}${API_V1}/patches/${patchId}`
+    // Use Next.js proxy
+    const endpoint = `/api/patches/${patchId}`
     const response = await fetch(endpoint)
 
     if (!response.ok) {
@@ -608,7 +612,8 @@ export async function fetchPatch(patchId: string): Promise<PatchAsset> {
 
 export async function deletePatch(patchId: string): Promise<void> {
   try {
-    const endpoint = `${BACKEND_API_URL}${API_V1}/patches/${patchId}`
+    // Use Next.js proxy
+    const endpoint = `/api/patches/${patchId}`
     const response = await fetch(endpoint, {
       method: 'DELETE',
     })
@@ -634,7 +639,8 @@ export async function fetchAttackDatasets(params?: {
     if (params?.limit !== undefined) queryParams.append('limit', params.limit.toString())
     if (params?.target_class) queryParams.append('target_class', params.target_class)
 
-    const endpoint = `${BACKEND_API_URL}${API_V1}/attack-datasets?${queryParams.toString()}`
+    // Use Next.js proxy
+    const endpoint = `/api/attack-datasets?${queryParams.toString()}`
     const response = await fetch(endpoint)
 
     if (!response.ok) {
@@ -651,7 +657,8 @@ export async function fetchAttackDatasets(params?: {
 
 export async function fetchAttackDataset(datasetId: string): Promise<AttackDatasetAsset> {
   try {
-    const endpoint = `${BACKEND_API_URL}${API_V1}/attack-datasets/${datasetId}`
+    // Use Next.js proxy
+    const endpoint = `/api/attack-datasets/${datasetId}`
     const response = await fetch(endpoint)
 
     if (!response.ok) {
@@ -668,8 +675,8 @@ export async function fetchAttackDataset(datasetId: string): Promise<AttackDatas
 
 export async function deleteAttackDataset(datasetId: string): Promise<void> {
   try {
-    // Fixed: Use correct backend endpoint
-    const endpoint = `${BACKEND_API_URL}${API_V1}/attack-datasets/${datasetId}`
+    // Use Next.js proxy
+    const endpoint = `/api/attack-datasets/${datasetId}`
     const response = await fetch(endpoint, {
       method: 'DELETE',
     })

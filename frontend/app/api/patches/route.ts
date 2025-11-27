@@ -9,13 +9,14 @@ const BACKEND_API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_B
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const queryString = searchParams.toString()
+    const limit = searchParams.get('limit') || '100'
+    const skip = searchParams.get('skip') || '0'
 
-    console.log('[/api/attack-datasets] GET request - query:', queryString)
+    console.log('[/api/patches] GET request - limit:', limit, 'skip:', skip)
 
     // Forward to backend API
     const backendResponse = await fetch(
-      `${BACKEND_API_URL}/api/v1/attack-datasets/?${queryString}`,
+      `${BACKEND_API_URL}/api/v1/patches/?limit=${limit}&skip=${skip}`,
       {
         method: 'GET',
         headers: {
@@ -26,19 +27,19 @@ export async function GET(request: NextRequest) {
 
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json().catch(() => ({ detail: 'Unknown error' }))
-      console.error('[/api/attack-datasets] Backend error:', errorData)
+      console.error('[/api/patches] Backend error:', errorData)
       return NextResponse.json(
-        { error: errorData.detail || 'Failed to fetch attack datasets' },
+        { error: errorData.detail || 'Failed to fetch patches' },
         { status: backendResponse.status }
       )
     }
 
-    const datasets = await backendResponse.json()
-    console.log('[/api/attack-datasets] Fetched datasets count:', datasets.length)
+    const patches = await backendResponse.json()
+    console.log('[/api/patches] Fetched patches count:', patches.length)
 
-    return NextResponse.json(datasets)
+    return NextResponse.json(patches)
   } catch (error) {
-    console.error('[/api/attack-datasets] Error:', error)
+    console.error('[/api/patches] Error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

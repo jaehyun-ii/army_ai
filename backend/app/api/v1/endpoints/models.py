@@ -26,7 +26,6 @@ async def upload_model_for_estimator(
     *,
     db: AsyncSession = Depends(get_db),
     name: str = Form(None),
-    version: str = Form(None),
     framework: schemas.EstimatorFramework = Form(None),
     estimator_type: schemas.EstimatorType = Form(None),
     weights_file: UploadFile = File(None),
@@ -40,7 +39,7 @@ async def upload_model_for_estimator(
     Now supports automatic metadata extraction from .pt and config files (.yaml or .py)!
 
     If both .pt and config files are provided, metadata will be automatically extracted.
-    Manual fields (name, version, labelmap_json, etc.) can override auto-detected values.
+    Manual fields (name, labelmap_json, etc.) can override auto-detected values.
 
     Config file formats:
     - .yaml/.yml: For YOLO models
@@ -110,7 +109,7 @@ async def upload_model_for_estimator(
         elif auto_input_size:
             input_size = auto_input_size
 
-        # Use manual name/version or derive from filename
+        # Use manual name or derive from filename
         model_name = name
         if not model_name and weights_file:
             model_name = Path(weights_file.filename).stem
@@ -119,8 +118,6 @@ async def upload_model_for_estimator(
 
         if not model_name:
             raise HTTPException(status_code=400, detail="Model name is required")
-
-        model_version = version or "1.0.0"
 
         # Use manual estimator_type or auto-detected
         final_estimator_type = estimator_type
@@ -159,7 +156,7 @@ async def upload_model_for_estimator(
     # Save the model file
     from app.core.config import settings
     storage_base = Path(settings.STORAGE_ROOT) / "models"
-    model_dir = storage_base / model_name / model_version
+    model_dir = storage_base / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
     if weights_file:
@@ -186,7 +183,6 @@ async def upload_model_for_estimator(
 
     model_in = schemas.ODModelCreate(
         name=model_name,
-        version=model_version,
         description=description or f"Auto-uploaded {auto_model_type or 'detection'} model",
         framework=final_framework.value,
         inference_params=inference_params,
@@ -197,7 +193,7 @@ async def upload_model_for_estimator(
 
     # Create artifact entries
     # storage_key should be the relative path from STORAGE_ROOT/models to the directory containing the file
-    storage_key = f"{model_name}/{model_version}"
+    storage_key = f"{model_name}"
 
     if weights_file:
         from app.models.model_repo import ArtifactType
@@ -245,13 +241,12 @@ async def list_model_versions(
     )
     models = result.scalars().all()
 
-    # Format response - each model IS a version now
+    # Format response
     return [
         {
             "id": str(m.id),
             "model_id": str(m.id),  # Same as id for backward compatibility
             "name": m.name,
-            "version": m.version,
             "framework": m.framework,
             "stage": m.stage,
             "created_at": m.created_at.isoformat()
@@ -330,7 +325,7 @@ async def delete_model(
 
     # Delete model files from storage
     from app.core.config import settings
-    model_dir = Path(settings.STORAGE_ROOT) / "models" / model.name / model.version
+    model_dir = Path(settings.STORAGE_ROOT) / "models" / model.name
     if model_dir.exists():
         shutil.rmtree(model_dir)
         logger.info(f"Deleted model files: {model_dir}")
@@ -526,11 +521,10 @@ async def download_model_archive(
                     logger.info(f"Added {artifact.file_name} to archive")
 
             # Create README with model metadata
-            readme_content = f"""# {model.name} v{model.version}
+            readme_content = f"""# {model.name}
 
 ## Model Information
 - **Name**: {model.name}
-- **Version**: {model.version}
 - **Framework**: {model.framework}
 - **Task**: {model.task}
 - **Stage**: {model.stage}
@@ -552,7 +546,7 @@ async def download_model_archive(
             zipf.writestr('README.md', readme_content)
 
         # Return ZIP file
-        zip_filename = f"{model.name}_v{model.version}.zip"
+        zip_filename = f"{model.name}.zip"
 
         return FileResponse(
             path=str(temp_zip_path),

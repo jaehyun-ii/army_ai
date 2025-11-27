@@ -178,6 +178,10 @@ class StorageManager:
         """
         try:
             path = Path(storage_path)
+            # If path is relative, resolve it against storage_root
+            if not path.is_absolute():
+                path = self.storage_root / storage_path
+
             if path.exists() and path.is_dir():
                 shutil.rmtree(path)
                 return True
@@ -198,6 +202,10 @@ class StorageManager:
         from app.core.config import settings
 
         path = Path(storage_path)
+        # If path is relative, resolve it against storage_root
+        if not path.is_absolute():
+            path = self.storage_root / storage_path
+
         if not path.exists():
             raise FileNotFoundError(f"Dataset not found: {storage_path}")
 

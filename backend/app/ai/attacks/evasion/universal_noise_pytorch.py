@@ -381,7 +381,7 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                 if self.apply_mask:
                     x_adv_batch = self._apply_perturbation_with_mask(x_batch, y_batch_torch)
                 else:
-                x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, self.clip_min, self.clip_max)
+                    x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, self.clip_min, self.clip_max)
 
                 # Convert to numpy for ART interface
                 x_adv_numpy = x_adv_batch.detach().cpu().numpy()

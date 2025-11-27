@@ -7,7 +7,7 @@
 export function getBackendUrl(): string {
   // 서버사이드에서는 BACKEND_API_URL 우선 사용
   if (typeof window === 'undefined') {
-    return process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
+    return process.env.BACKEND_API_URL || 'http://army_ai_backend_dev:8000'
   }
 
   // 클라이언트사이드에서는 NEXT_PUBLIC_BACKEND_API_URL 사용

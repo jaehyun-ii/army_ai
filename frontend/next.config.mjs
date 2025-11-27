@@ -22,6 +22,16 @@ const nextConfig = {
   },
   output: 'standalone',
   distDir: '.next',
+  // Disable timeouts for long-running operations like patch/noise generation
+  experimental: {
+    // Increase server action timeout (default 60s)
+    serverActionsBodySizeLimit: '10mb',
+  },
+  // Custom server configuration
+  serverRuntimeConfig: {
+    // Disable request timeout
+    timeout: 0,
+  },
 }
 
 export default nextConfig

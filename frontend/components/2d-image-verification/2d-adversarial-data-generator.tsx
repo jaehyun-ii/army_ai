@@ -41,14 +41,19 @@ import {
   connectAdversarialDataSSE,
   downloadAdversarialDataset,
   fetchBackendDatasets,
-  fetchYoloModels,
+  // Removed fetchYoloModels import
   fetchAdversarialDatasetImages,
   previewPatchOnImage,
   type AdversarialDataLog,
   type BackendDataset,
-  type YoloModel
+  // Removed YoloModel type
 } from "@/lib/adversarial-api"
 import { ImageWithBBox } from "@/components/annotations/ImageWithBBox"
+
+interface ModelInfo {
+  id: string
+  name: string
+}
 
 // FastAPI backend URL - Use NEXT_PUBLIC_BACKEND_API_URL environment variable
 const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000'
@@ -111,8 +116,9 @@ export function AdversarialDataGeneratorUpdated() {
   const [eventSource, setEventSource] = useState<EventSource | null>(null)
   const [generationLogs, setGenerationLogs] = useState<AdversarialDataLog[]>([])
   const [generatedDatasetId, setGeneratedDatasetId] = useState<string | null>(null)
+  const [attackDatasetId, setAttackDatasetId] = useState<string | null>(null)
   const [backendDatasets, setBackendDatasets] = useState<BackendDataset[]>([])
-  const [yoloModels, setYoloModels] = useState<YoloModel[]>([])
+  const [yoloModels, setYoloModels] = useState<ModelInfo[]>([])
   const [noiseConfig, setNoiseConfig] = useState({
     targetModel: "",
     method: "pgd", // Default to PGD
@@ -187,14 +193,18 @@ export function AdversarialDataGeneratorUpdated() {
       )
 
       if (completionLog) {
-        const datasetId = completionLog.dataset_id || completionLog.attack_dataset_id || generatedDatasetId
+        // Use output_dataset_id for images, not generation_id/attack_dataset_id
+        const outputDatasetId = completionLog.output_dataset_id
+        const attackDatasetId = completionLog.generation_id || completionLog.attack_dataset_id
         const totalProcessed = completionLog.processed || completionLog.processed_images || completionLog.total || 0
         const successful = completionLog.successful || completionLog.processed_images || totalProcessed
         const failed = completionLog.failed || completionLog.failed_images || 0
 
-        setGeneratedDatasetId(datasetId || null)
+        // Use output_dataset_id for loading images, attack_dataset_id for download
+        setGeneratedDatasetId(outputDatasetId || generatedDatasetId)
+        setAttackDatasetId(attackDatasetId || null)
         setGenerationResults([{
-          id: datasetId || `attack_${Date.now()}`,
+          id: outputDatasetId || attackDatasetId || `attack_${Date.now()}`,
           name: datasetName,
           attackType: attackType,
           totalProcessed: totalProcessed,
@@ -414,7 +424,8 @@ export function AdversarialDataGeneratorUpdated() {
 
   const loadSavedPatches = async () => {
     try {
-      const response = await fetch(`${API_V1_BASE}/patches?limit=100`)
+      // Use Next.js proxy instead of direct backend call
+      const response = await fetch(`/api/patches?limit=100`)
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
@@ -467,12 +478,18 @@ export function AdversarialDataGeneratorUpdated() {
 
   const loadYoloModels = async () => {
     try {
-      const models = await fetchYoloModels()
+      const response = await fetch('/api/models') // Use the consistent API endpoint
+      const data = await response.json()
+
+      const models = Array.isArray(data) ? data.map((model: any) => ({
+        id: model.id,
+        name: model.name || 'Unknown Model'
+      })) : []
       setYoloModels(models)
-      console.log('Loaded YOLO models:', models)
+      console.log('Loaded models:', models)
     } catch (error) {
-      console.error('Failed to load YOLO models:', error)
-      toast.error('YOLO 모델 목록을 불러오는데 실패했습니다')
+      console.error('Failed to load models:', error)
+      toast.error('모델 목록을 불러오는데 실패했습니다')
     }
   }
 
@@ -1136,11 +1153,11 @@ export function AdversarialDataGeneratorUpdated() {
         </div>
       )}
 
-      {generatedDatasetId && (
+      {attackDatasetId && (
         <Button
           onClick={async () => {
             try {
-              await downloadAdversarialDataset(generatedDatasetId, datasetName)
+              await downloadAdversarialDataset(attackDatasetId, datasetName)
               toast.success('데이터셋 다운로드가 시작되었습니다')
             } catch (error) {
               toast.error('데이터셋 다운로드에 실패했습니다')
@@ -1576,6 +1593,7 @@ export function AdversarialDataGeneratorUpdated() {
         setGenerationResults([])
         setAttackProgress(null)
         setGeneratedDatasetId(null)
+        setAttackDatasetId(null)
         setGenerationLogs([])
         setResultPreviewImages([])
         setResultCurrentPage(1)

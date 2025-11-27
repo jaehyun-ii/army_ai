@@ -55,8 +55,7 @@ class ODModel(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     description = Column(Text)
 
-    # Merged from ODModelVersion
-    version = Column(String(64), nullable=False)
+    # Model metadata
     framework = Column(SQLEnum(ModelFramework, name="model_framework_enum", values_callable=lambda x: [e.value for e in x]), nullable=False)
     framework_version = Column(String(64))
     input_spec = Column(JSONB)
