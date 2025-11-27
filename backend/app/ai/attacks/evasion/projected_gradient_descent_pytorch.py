@@ -35,6 +35,7 @@ from app.ai.config import ART_NUMPY_DTYPE
 from app.ai.summary_writer import SummaryWriter
 from app.ai.estimators.estimator import BaseEstimator, LossGradientsMixin
 from app.ai.estimators.classification.classifier import ClassifierMixin
+from app.ai.estimators.object_detection.object_detector import ObjectDetectorMixin
 from app.ai.attacks.attack import EvasionAttack
 from app.ai.utils import compute_success, random_sphere, compute_success_array, get_labels_np_array, check_and_transform_label_format
 
@@ -42,8 +43,99 @@ if TYPE_CHECKING:
 
     import torch
     from app.ai.estimators.classification.pytorch import PyTorchClassifier
+    from app.ai.utils import OBJECT_DETECTOR_TYPE
 
 logger = logging.getLogger(__name__)
+
+
+class _PseudoGTGenerator:
+    """
+    Generate pseudo ground truth labels using ART's predict API.
+
+    This enables unsupervised adversarial attacks by using the model's own
+    predictions as training targets for object detection models.
+    """
+
+    def __init__(
+        self,
+        estimator,
+        target_class_id: int = 0,
+        confidence_threshold: float = 0.3,
+        device: str = 'cpu'
+    ):
+        """
+        Args:
+            estimator: ART estimator (for predict API)
+            target_class_id: Class ID to target (e.g., 0 for 'person' in COCO)
+            confidence_threshold: Minimum confidence for pseudo-GT
+            device: Device to run on ('cpu' or 'cuda')
+        """
+        self.estimator = estimator
+        self.target_class_id = target_class_id
+        self.confidence_threshold = confidence_threshold
+        self.device = device
+
+    def generate_from_numpy(
+        self,
+        x: np.ndarray
+    ) -> list[dict[str, np.ndarray]]:
+        """
+        Generate pseudo-GT using ART's predict API.
+
+        Args:
+            x: Input images in NumPy format
+
+        Returns:
+            List of dicts with 'boxes' and 'labels' for each image (NumPy arrays)
+        """
+        import torch
+
+        pseudo_gts = []
+
+        # Use ART's predict API - handles all preprocessing automatically
+        predictions = self.estimator.predict(x=x)
+
+        # Process each prediction
+        for idx, pred in enumerate(predictions):
+            try:
+                if 'boxes' not in pred or len(pred['boxes']) == 0:
+                    pseudo_gts.append(self._empty_pseudo_gt_numpy())
+                    continue
+
+                boxes = pred['boxes']
+                scores = pred['scores']
+                classes = pred['labels']
+
+                # Filter by target class and confidence
+                mask = (classes == self.target_class_id) & (scores >= self.confidence_threshold)
+                filtered_boxes = boxes[mask]
+                filtered_labels = classes[mask]
+                filtered_scores = scores[mask]
+
+                # If no detections, use empty arrays
+                if len(filtered_boxes) == 0:
+                    pseudo_gts.append(self._empty_pseudo_gt_numpy())
+                else:
+                    # Use highest confidence detection
+                    best_idx = filtered_scores.argmax()
+                    pseudo_gt = {
+                        'boxes': filtered_boxes[best_idx:best_idx+1],  # (1, 4)
+                        'labels': filtered_labels[best_idx:best_idx+1]  # (1,)
+                    }
+                    pseudo_gts.append(pseudo_gt)
+
+            except Exception as e:
+                logger.error(f"Error processing result {idx}: {e}")
+                pseudo_gts.append(self._empty_pseudo_gt_numpy())
+
+        return pseudo_gts
+
+    def _empty_pseudo_gt_numpy(self) -> dict[str, np.ndarray]:
+        """Create empty pseudo-GT (NumPy)."""
+        return {
+            'boxes': np.zeros((0, 4), dtype=np.float32),
+            'labels': np.zeros(0, dtype=np.int64)
+        }
 
 
 class ProjectedGradientDescentPyTorch(EvasionAttack):
@@ -67,12 +159,15 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         "random_eps",
         "summary_writer",
         "verbose",
+        "target_class_id",
     ]
-    _estimator_requirements = (BaseEstimator, LossGradientsMixin, ClassifierMixin)  # type: ignore
+    # Support both classification (ClassifierMixin) and object detection (ObjectDetectorMixin)
+    # The tuple (ClassifierMixin, ObjectDetectorMixin) means estimator must inherit from at least one of them
+    _estimator_requirements = (BaseEstimator, LossGradientsMixin, (ClassifierMixin, ObjectDetectorMixin))  # type: ignore
 
     def __init__(
         self,
-        estimator: "PyTorchClassifier",
+        estimator: "PyTorchClassifier | OBJECT_DETECTOR_TYPE",
         norm: int | float | str = np.inf,
         eps: int | float | np.ndarray = 0.3,
         eps_step: int | float | np.ndarray = 0.1,
@@ -84,11 +179,12 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         random_eps: bool = False,
         summary_writer: str | bool | SummaryWriter = False,
         verbose: bool = True,
+        target_class_id: int = 0,
     ):
         """
         Create a :class:`.ProjectedGradientDescentPyTorch` instance.
 
-        :param estimator: A trained estimator.
+        :param estimator: A trained estimator (classifier or object detector).
         :param norm: The norm of the adversarial perturbation, supporting  "inf", `np.inf` or a real `p >= 1`.
                      Currently, when `p` is not infinity, the projection step only rescales the noise, which may be
                      suboptimal for `p != 2`.
@@ -109,8 +205,9 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
                                If of type `str` save in path.
                                If of type `SummaryWriter` apply provided custom summary writer.
                                Use hierarchical folder structure to compare between runs easily. e.g. pass in
-                               ‘runs/exp1’, ‘runs/exp2’, etc. for each new experiment to compare across them.
+                               'runs/exp1', 'runs/exp2', etc. for each new experiment to compare across them.
         :param verbose: Show progress bars.
+        :param target_class_id: Target class ID for object detection models (used for pseudo-GT generation). Ignored for classification models.
         """
         if not estimator.all_framework_preprocessing:
             raise NotImplementedError(
@@ -133,12 +230,80 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         self.batch_size = batch_size
         self.random_eps = random_eps
         self.verbose = verbose
+        self.target_class_id = target_class_id
+
+        # Check if this is an object detection model
+        self._is_object_detector = isinstance(estimator, ObjectDetectorMixin)
+
+        # Initialize pseudo-GT generator for object detection models
+        if self._is_object_detector:
+            import torch
+            device = estimator.device if hasattr(estimator, 'device') else 'cpu'
+            self._pseudo_gt_gen = _PseudoGTGenerator(
+                estimator=estimator,
+                target_class_id=target_class_id,
+                confidence_threshold=0.3,
+                device=device
+            )
+            logger.info(f"Initialized PGD for object detection with target_class_id={target_class_id}")
+        else:
+            self._pseudo_gt_gen = None
+            logger.info("Initialized PGD for classification")
 
         # Validate parameters
         self._check_params()
 
         self._batch_id = 0
         self._i_max_iter = 0
+
+    def _get_mask(self, x: np.ndarray, **kwargs) -> np.ndarray | None:
+        """
+        Get mask from kwargs.
+
+        :param x: Input samples.
+        :param kwargs: Additional keyword arguments.
+        :return: Mask if provided in kwargs, otherwise None.
+        """
+        return kwargs.get("mask", None)
+
+    def _check_compatibility_input_and_eps(self, x: np.ndarray) -> None:
+        """
+        Check the compatibility of input samples and epsilon values.
+
+        :param x: Input samples.
+        """
+        if isinstance(self.eps, np.ndarray):
+            # Check if eps shape is compatible with x
+            if self.eps.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"The first dimension of `eps` must match the batch size of `x`. "
+                    f"Got eps.shape[0]={self.eps.shape[0]}, x.shape[0]={x.shape[0]}"
+                )
+
+        if isinstance(self.eps_step, np.ndarray):
+            # Check if eps_step shape is compatible with x
+            if self.eps_step.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"The first dimension of `eps_step` must match the batch size of `x`. "
+                    f"Got eps_step.shape[0]={self.eps_step.shape[0]}, x.shape[0]={x.shape[0]}"
+                )
+
+    def _random_eps(self) -> None:
+        """
+        Apply random epsilon sampling from truncated normal distribution.
+        Only applies when self.random_eps is True.
+        """
+        if self.random_eps:
+            # Sample epsilon from truncated normal distribution
+            if isinstance(self.eps, (int, float)):
+                # Sample a random value from normal distribution truncated at [0, 2*eps]
+                self.eps = np.abs(np.random.normal(loc=self.eps, scale=self.eps / 2))
+                self.eps = np.clip(self.eps, 0, 2 * self.eps)
+
+                # Adjust eps_step to maintain the ratio
+                if isinstance(self.eps_step, (int, float)):
+                    ratio = self.eps_step / self.eps if self.eps > 0 else 0.1
+                    self.eps_step = ratio * self.eps
 
     def generate(self, x: np.ndarray, y: np.ndarray | None = None, **kwargs) -> np.ndarray:
         """
@@ -168,32 +333,67 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         # Set up targets
         targets = self._set_targets(x, y)
 
-        # Create dataset
-        if mask is not None:
-            # Here we need to make a distinction: if the masks are different for each input, we need to index
-            # those for the current batch. Otherwise, (i.e. mask is meant to be broadcasted), keep it as it is.
-            if len(mask.shape) == len(x.shape):
-                dataset = torch.utils.data.TensorDataset(
-                    torch.from_numpy(x.astype(ART_NUMPY_DTYPE)),
-                    torch.from_numpy(targets.astype(ART_NUMPY_DTYPE)),
-                    torch.from_numpy(mask.astype(ART_NUMPY_DTYPE)),
-                )
+        # Create dataset - handle object detection (list) vs classification (array) differently
+        if self._is_object_detector:
+            # For object detection, targets is a list of dicts, use custom dataset
+            class ObjectDetectionDataset(torch.utils.data.Dataset):
+                def __init__(self, images, labels, mask=None):
+                    self.images = torch.from_numpy(images.astype(ART_NUMPY_DTYPE))
+                    self.labels = labels  # list of dicts
+                    self.mask = mask
+                    if mask is not None:
+                        if len(mask.shape) == len(images.shape):
+                            self.mask = torch.from_numpy(mask.astype(ART_NUMPY_DTYPE))
+                        else:
+                            self.mask = torch.from_numpy(np.array([mask.astype(ART_NUMPY_DTYPE)] * images.shape[0]))
+
+                def __len__(self):
+                    return len(self.images)
+
+                def __getitem__(self, idx):
+                    if self.mask is not None:
+                        return self.images[idx], self.labels[idx], self.mask[idx]
+                    return self.images[idx], self.labels[idx], None
+
+            # Custom collate function for object detection that keeps labels as list of dicts
+            def collate_fn_od(batch):
+                images = torch.stack([item[0] for item in batch])
+                labels = [item[1] for item in batch]  # Keep as list of dicts
+                masks = None
+                if batch[0][2] is not None:
+                    masks = torch.stack([item[2] for item in batch])
+                return images, labels, masks
+
+            dataset = ObjectDetectionDataset(x, targets, mask)
+            collate_fn = collate_fn_od
+        else:
+            # For classification, targets is a numpy array, use TensorDataset
+            if mask is not None:
+                # Here we need to make a distinction: if the masks are different for each input, we need to index
+                # those for the current batch. Otherwise, (i.e. mask is meant to be broadcasted), keep it as it is.
+                if len(mask.shape) == len(x.shape):
+                    dataset = torch.utils.data.TensorDataset(
+                        torch.from_numpy(x.astype(ART_NUMPY_DTYPE)),
+                        torch.from_numpy(targets.astype(ART_NUMPY_DTYPE)),
+                        torch.from_numpy(mask.astype(ART_NUMPY_DTYPE)),
+                    )
+
+                else:
+                    dataset = torch.utils.data.TensorDataset(
+                        torch.from_numpy(x.astype(ART_NUMPY_DTYPE)),
+                        torch.from_numpy(targets.astype(ART_NUMPY_DTYPE)),
+                        torch.from_numpy(np.array([mask.astype(ART_NUMPY_DTYPE)] * x.shape[0])),
+                    )
 
             else:
                 dataset = torch.utils.data.TensorDataset(
                     torch.from_numpy(x.astype(ART_NUMPY_DTYPE)),
                     torch.from_numpy(targets.astype(ART_NUMPY_DTYPE)),
-                    torch.from_numpy(np.array([mask.astype(ART_NUMPY_DTYPE)] * x.shape[0])),
                 )
-
-        else:
-            dataset = torch.utils.data.TensorDataset(
-                torch.from_numpy(x.astype(ART_NUMPY_DTYPE)),
-                torch.from_numpy(targets.astype(ART_NUMPY_DTYPE)),
-            )
+            collate_fn = None
 
         data_loader = torch.utils.data.DataLoader(
-            dataset=dataset, batch_size=self.batch_size, shuffle=False, drop_last=False
+            dataset=dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, collate_fn=collate_fn
         )
 
         # Start to compute adversarial examples
@@ -241,21 +441,29 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
                         x=batch, targets=batch_labels, mask=mask_batch, eps=batch_eps, eps_step=batch_eps_step
                     )
 
-                    # return the successful adversarial examples
-                    attack_success = compute_success_array(
-                        self.estimator,
-                        batch,
-                        batch_labels,
-                        adversarial_batch,
-                        self.targeted,
-                        batch_size=self.batch_size,
-                    )
-                    adv_x[batch_index_1:batch_index_2][attack_success] = adversarial_batch[attack_success]
+                    # return the successful adversarial examples (only for classification)
+                    if not self._is_object_detector:
+                        attack_success = compute_success_array(
+                            self.estimator,
+                            batch,
+                            batch_labels,
+                            adversarial_batch,
+                            self.targeted,
+                            batch_size=self.batch_size,
+                        )
+                        adv_x[batch_index_1:batch_index_2][attack_success] = adversarial_batch[attack_success]
+                    else:
+                        # For object detection, always use the new adversarial examples
+                        adv_x[batch_index_1:batch_index_2] = adversarial_batch
 
-        logger.info(
-            "Success rate of attack: %.2f%%",
-            100 * compute_success(self.estimator, x, targets, adv_x, self.targeted, batch_size=self.batch_size),
-        )
+        # Compute success rate only for classification models
+        if not self._is_object_detector:
+            logger.info(
+                "Success rate of attack: %.2f%%",
+                100 * compute_success(self.estimator, x, targets, adv_x, self.targeted, batch_size=self.batch_size),
+            )
+        else:
+            logger.info("PGD attack completed for object detection model")
 
         if self.summary_writer is not None:
             self.summary_writer.reset()
@@ -265,7 +473,7 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
     def _generate_batch(
         self,
         x: "torch.Tensor",
-        targets: "torch.Tensor",
+        targets: "torch.Tensor | list",
         mask: "torch.Tensor",
         eps: int | float | np.ndarray,
         eps_step: int | float | np.ndarray,
@@ -274,7 +482,8 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         Generate a batch of adversarial samples and return them in an array.
 
         :param x: An array with the original inputs.
-        :param targets: Target values (class labels) one-hot-encoded of shape `(nb_samples, nb_classes)`.
+        :param targets: Target values. For classification: tensor of shape `(nb_samples, nb_classes)`.
+                       For object detection: list of dicts with 'boxes' and 'labels'.
         :param mask: An array with a mask to be applied to the adversarial perturbations. Shape needs to be
                      broadcastable to the shape of x. Any features for which the mask is zero will not be adversarially
                      perturbed.
@@ -285,7 +494,12 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         import torch
 
         inputs = x.to(self.estimator.device)
-        targets = targets.to(self.estimator.device)
+
+        # Handle targets - for object detection it's a list, for classification it's a tensor
+        if not self._is_object_detector:
+            targets = targets.to(self.estimator.device)
+        # For object detection, targets is already a list of dicts, keep as is
+
         adv_x = torch.clone(inputs)
         momentum = torch.zeros(inputs.shape).to(self.estimator.device)
 
@@ -301,16 +515,14 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         return adv_x.cpu().detach().numpy()
 
     def _compute_perturbation_pytorch(
-        self, x: "torch.Tensor", y: "torch.Tensor", mask: "torch.Tensor" | None, momentum: "torch.Tensor"
+        self, x: "torch.Tensor", y: "torch.Tensor | list", mask: "torch.Tensor" | None, momentum: "torch.Tensor"
     ) -> "torch.Tensor":
         """
         Compute perturbations.
 
         :param x: Current adversarial examples.
-        :param y: Target values (class labels) one-hot-encoded of shape `(nb_samples, nb_classes)` or indices of shape
-                  (nb_samples,). Only provide this parameter if you'd like to use true labels when crafting adversarial
-                  samples. Otherwise, model predictions are used as labels to avoid the "label leaking" effect
-                  (explained in this paper: https://arxiv.org/abs/1611.01236). Default is `None`.
+        :param y: Target values. For classification: tensor of shape `(nb_samples, nb_classes)`.
+                  For object detection: list of dicts with 'boxes' and 'labels'.
         :param mask: An array with a mask broadcastable to input `x` defining where to apply adversarial perturbations.
                      Shape needs to be broadcastable to the shape of x and can also be of the same shape as `x`. Any
                      features for which the mask is zero will not be adversarially perturbed.
@@ -318,11 +530,33 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         """
         import torch
 
-        # Get gradient wrt loss; invert it if attack is targeted
-        grad = self.estimator.loss_gradient(x=x, y=y) * (-1 if self.targeted else 1)
+        # For object detection, filter out samples with empty boxes
+        if self._is_object_detector and isinstance(y, list):
+            # Find indices of samples with valid detections
+            valid_indices = [i for i, label_dict in enumerate(y) if len(label_dict.get('boxes', [])) > 0]
+
+            if len(valid_indices) == 0:
+                # All samples have no detections, return zero gradient
+                logger.warning("All samples have no detected objects, returning zero gradients")
+                return torch.zeros_like(x)
+
+            # Filter x and y to only include valid samples
+            x_valid = x[valid_indices]
+            y_valid = [y[i] for i in valid_indices]
+
+            # Get gradient only for valid samples
+            grad_valid = self.estimator.loss_gradient(x=x_valid, y=y_valid) * (-1 if self.targeted else 1)
+
+            # Create full gradient tensor with zeros for invalid samples
+            grad = torch.zeros_like(x)
+            grad[valid_indices] = grad_valid
+        else:
+            # For classification, compute gradient normally
+            grad = self.estimator.loss_gradient(x=x, y=y) * (-1 if self.targeted else 1)
 
         # Write summary
         if self.summary_writer is not None:  # pragma: no cover
+            y_numpy = y if self._is_object_detector else y.cpu().detach().numpy()
             self.summary_writer.update(
                 batch_id=self._batch_id,
                 global_step=self._i_max_iter,
@@ -330,7 +564,7 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
                 patch=None,
                 estimator=self.estimator,
                 x=x.cpu().detach().numpy(),
-                y=y.cpu().detach().numpy(),
+                y=y_numpy,
                 targeted=self.targeted,
             )
 
@@ -405,7 +639,7 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
         self,
         x: "torch.Tensor",
         x_init: "torch.Tensor",
-        y: "torch.Tensor",
+        y: "torch.Tensor | list",
         mask: "torch.Tensor",
         eps: int | float | np.ndarray,
         eps_step: int | float | np.ndarray,
@@ -417,10 +651,8 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
 
         :param x: Current adversarial examples.
         :param x_init: An array with the original inputs.
-        :param y: Target values (class labels) one-hot-encoded of shape `(nb_samples, nb_classes)` or indices of shape
-                  (nb_samples,). Only provide this parameter if you'd like to use true labels when crafting adversarial
-                  samples. Otherwise, model predictions are used as labels to avoid the "label leaking" effect
-                  (explained in this paper: https://arxiv.org/abs/1611.01236).
+        :param y: Target values. For classification: tensor of shape `(nb_samples, nb_classes)`.
+                  For object detection: list of dicts with 'boxes' and 'labels'.
         :param mask: An array with a mask broadcastable to input `x` defining where to apply adversarial perturbations.
                      Shape needs to be broadcastable to the shape of x and can also be of the same shape as `x`. Any
                      features for which the mask is zero will not be adversarially perturbed.
@@ -531,17 +763,30 @@ class ProjectedGradientDescentPyTorch(EvasionAttack):
 
         return values
 
-    def _set_targets(self, x: np.ndarray, y: np.ndarray | None) -> np.ndarray:
+    def _set_targets(self, x: np.ndarray, y: np.ndarray | list | None) -> np.ndarray | list:
         """
         Check and set up targets.
 
         :param x: An array with the original inputs.
-        :param y: Target values (class labels) one-hot-encoded of shape `(nb_samples, nb_classes)` or indices of shape
-                  (nb_samples,). Only provide this parameter if you'd like to use true labels when crafting adversarial
+        :param y: Target values. For classification: (class labels) one-hot-encoded of shape `(nb_samples, nb_classes)` or indices of shape
+                  (nb_samples,). For object detection: list of dicts with 'boxes' and 'labels'.
+                  Only provide this parameter if you'd like to use true labels when crafting adversarial
                   samples. Otherwise, model predictions are used as labels to avoid the "label leaking" effect
                   (explained in this paper: https://arxiv.org/abs/1611.01236). Default is `None`.
         :return: The targets.
         """
+        # Handle object detection models
+        if self._is_object_detector:
+            if y is None:
+                # Generate pseudo ground truth for object detection
+                logger.info("Generating pseudo-GT for object detection model")
+                targets = self._pseudo_gt_gen.generate_from_numpy(x)
+            else:
+                # Use provided labels
+                targets = y
+            return targets
+
+        # Handle classification models (original logic)
         if y is not None:
             y = check_and_transform_label_format(y, nb_classes=self.estimator.nb_classes)
 

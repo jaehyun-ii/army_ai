@@ -33,6 +33,7 @@ from app.ai.attacks.evasion.projected_gradient_descent_pytorch import ProjectedG
 
 if TYPE_CHECKING:
     from app.ai.estimators.classification.pytorch import PyTorchClassifier
+    from app.ai.utils import OBJECT_DETECTOR_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class FastGradientMethodPyTorch(ProjectedGradientDescentPyTorch):
 
     def __init__(
         self,
-        estimator: "PyTorchClassifier",
+        estimator: "PyTorchClassifier | OBJECT_DETECTOR_TYPE",
         norm: int | float | str = np.inf,
         eps: int | float | np.ndarray = 0.3,
         eps_step: int | float | np.ndarray = 0.1,
@@ -56,11 +57,12 @@ class FastGradientMethodPyTorch(ProjectedGradientDescentPyTorch):
         num_random_init: int = 0,
         batch_size: int = 32,
         summary_writer: str | bool | SummaryWriter = False,
+        target_class_id: int = 0,
     ):
         """
         Create a :class:`.FastGradientMethodPyTorch` instance.
 
-        :param estimator: A trained PyTorch classifier.
+        :param estimator: A trained PyTorch classifier or object detector.
         :param norm: The norm of the adversarial perturbation. Possible values: "inf", `np.inf` or a real `p >= 1`.
         :param eps: Attack step size (input variation).
         :param eps_step: Step size of input variation for minimal perturbation computation.
@@ -75,6 +77,7 @@ class FastGradientMethodPyTorch(ProjectedGradientDescentPyTorch):
                                If of type `SummaryWriter` apply provided custom summary writer.
                                Use hierarchical folder structure to compare between runs easily. e.g. pass in
                                'runs/exp1', 'runs/exp2', etc. for each new experiment to compare across them.
+        :param target_class_id: Target class ID for object detection models (used for pseudo-GT generation). Ignored for classification models.
         """
         # FGSM is PGD with max_iter=1
         super().__init__(
@@ -90,6 +93,7 @@ class FastGradientMethodPyTorch(ProjectedGradientDescentPyTorch):
             random_eps=False,
             summary_writer=summary_writer,
             verbose=False,  # No need for progress bar in single iteration
+            target_class_id=target_class_id,
         )
 
     def generate(self, x: np.ndarray, y: np.ndarray | None = None, **kwargs) -> np.ndarray:

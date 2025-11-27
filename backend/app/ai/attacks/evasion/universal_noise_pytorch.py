@@ -360,13 +360,21 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
             def __getitem__(self, idx):
                 return self.images[idx], self.labels_torch[idx], self.labels_numpy[idx]
 
+        # Custom collate function for object detection that keeps labels as list of dicts
+        def collate_fn_od(batch):
+            images = torch.stack([item[0] for item in batch])
+            labels_torch = [item[1] for item in batch]  # Keep as list of dicts
+            labels_numpy = [item[2] for item in batch]  # Keep as list of dicts
+            return images, labels_torch, labels_numpy
+
         # Create dataset and dataloader (following PGD PyTorch pattern)
         dataset = LabeledImageDataset(x, pseudo_gts, pseudo_gts_numpy)
         data_loader = torch.utils.data.DataLoader(
             dataset=dataset,
             batch_size=self.batch_size,
             shuffle=False,  # Don't shuffle to maintain order
-            drop_last=False
+            drop_last=False,
+            collate_fn=collate_fn_od  # Use custom collate for variable-size boxes
         )
 
         logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
@@ -392,17 +400,29 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                 if self.estimator.clip_values is not None:
                     x_adv_numpy = x_adv_numpy * self.estimator.clip_values[1]
 
-                # Use ART's loss_gradient for framework compliance
-                gradients = self.estimator.loss_gradient(x=x_adv_numpy, y=y_batch_numpy)
+                # Filter out samples with empty boxes before calling loss_gradient
+                valid_indices = [i for i, label_dict in enumerate(y_batch_numpy) if len(label_dict.get('boxes', [])) > 0]
+
+                if len(valid_indices) == 0:
+                    # All samples have no detections, skip this batch
+                    logger.warning("All samples in batch have no detected objects, skipping gradient update")
+                    continue
+
+                # Filter x and y to only include valid samples
+                x_adv_numpy_valid = x_adv_numpy[valid_indices]
+                y_batch_numpy_valid = [y_batch_numpy[i] for i in valid_indices]
+
+                # Use ART's loss_gradient for framework compliance (only for valid samples)
+                gradients_valid = self.estimator.loss_gradient(x=x_adv_numpy_valid, y=y_batch_numpy_valid)
 
                 # Convert gradients back to torch
                 if not self.estimator.channels_first:
-                    gradients = np.transpose(gradients, (0, 3, 1, 2))
-                grad_torch = torch.from_numpy(gradients).to(self.device)
+                    gradients_valid = np.transpose(gradients_valid, (0, 3, 1, 2))
+                grad_torch_valid = torch.from_numpy(gradients_valid).to(self.device)
 
                 # Gradient ascent: update perturbation to maximize loss
-                # Average gradients across batch
-                grad_avg = grad_torch.mean(dim=0, keepdim=True)
+                # Average gradients across valid samples only
+                grad_avg = grad_torch_valid.mean(dim=0, keepdim=True)
 
                 with torch.no_grad():
                     # Sign gradient for robustness (like FGSM)

@@ -872,7 +872,7 @@ class NoiseAttackService:
             model_type=model_type,
             class_names=class_names,
             input_size=input_size,
-            device_type="cpu",  # Use CPU for attacks
+            device_type="gpu",  # Use GPU for faster attacks
             clip_values=(0, 255),
         )
 
