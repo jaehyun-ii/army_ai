@@ -540,6 +540,7 @@ export interface PatchAsset {
   target_class: string
   source_dataset_id: string
   target_model_id?: string
+  storage_key?: string // Added: storage key for patch image
   created_at: string
   patch_metadata?: {
     iterations?: number
@@ -557,10 +558,11 @@ export interface AttackDatasetAsset {
   base_dataset_id: string
   target_class?: string
   target_model_id?: string
+  output_dataset_id?: string  // Output dataset ID (top-level field from backend)
   created_at: string
   parameters?: {
     processed_images?: number
-    output_dataset_id?: string
+    output_dataset_id?: string  // Also in parameters for backward compatibility
     attack_method?: string
   }
 }
@@ -722,11 +724,13 @@ export function getImageUrlByStorageKey(storageKey: string): string {
 
 /**
  * Fetch images from a dataset
+ * Uses Next.js API proxy for better CORS handling and internal network access
  */
 export async function fetchDatasetImages(datasetId: string, limit: number = 4): Promise<any[]> {
   try {
-    const endpoint = `${BACKEND_API_URL}${API_V1}/datasets-2d/${datasetId}/images?limit=${limit}`
-    console.log('[fetchDatasetImages] Fetching from:', endpoint)
+    // Use Next.js API proxy instead of direct backend access
+    const endpoint = `/api/datasets/${datasetId}/images?limit=${limit}`
+    console.log('[fetchDatasetImages] Fetching from proxy:', endpoint)
     const response = await fetch(endpoint)
 
     if (!response.ok) {
@@ -737,9 +741,9 @@ export async function fetchDatasetImages(datasetId: string, limit: number = 4): 
     const data = await response.json()
     console.log('[fetchDatasetImages] Response data:', data)
 
-    // Backend returns array directly, not wrapped in items
-    const images = Array.isArray(data) ? data : []
-    console.log('[fetchDatasetImages] Parsed images:', images)
+    // API proxy returns { total, images } format
+    const images = data.images || (Array.isArray(data) ? data : [])
+    console.log('[fetchDatasetImages] Parsed images:', images.length, 'images')
     return images
   } catch (error) {
     console.error('[fetchDatasetImages] Failed to fetch dataset images:', error)

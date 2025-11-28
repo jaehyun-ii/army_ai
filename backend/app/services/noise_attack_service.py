@@ -872,7 +872,8 @@ class NoiseAttackService:
             model_type=model_type,
             class_names=class_names,
             input_size=input_size,
-            device_type="gpu",  # Use GPU for faster attacks
+            # Use CPU to avoid mixed-device issues inside ultralytics loss (proj/assigner tensors on CPU)
+            device_type="cpu",
             clip_values=(0, 255),
         )
 

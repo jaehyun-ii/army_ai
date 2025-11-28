@@ -19,7 +19,6 @@ import {
   Target,
   Calendar,
   Image as ImageIcon,
-  PlayCircle,
   Layers,
   Settings,
   X,
@@ -66,6 +65,10 @@ interface AdversarialDataset {
   createdAt: string
   imageCount: number
   outputDatasetId?: string // Added for accessing actual images
+  output_dataset_id?: string // Support snake_case from backend
+  parameters?: {
+    output_dataset_id?: string // Support nested format
+  }
   metadata?: {
     attackMethod?: string
     targetClass?: string
@@ -121,10 +124,16 @@ export function AdversarialAssetManagement() {
         setImageCarouselPage(0) // Reset page when opening modal
         try {
           // Use the output dataset ID where actual images are stored
-          const datasetId = selectedDataset.outputDatasetId
+          // Support both camelCase and snake_case for backend compatibility
+          const datasetId = selectedDataset.output_dataset_id ||
+                           selectedDataset.outputDatasetId ||
+                           selectedDataset.parameters?.output_dataset_id
           if (datasetId) {
-            // Load more images for pagination (8 per page, load 24 total)
-            const images = await fetchDatasetImages(datasetId, 24)
+            // Load ALL images from the dataset (use imageCount or large limit)
+            const limit = selectedDataset.imageCount || 10000
+            console.log(`[loadSampleImages] Loading ${limit} images for dataset ${datasetId}`)
+            const images = await fetchDatasetImages(datasetId, limit)
+            console.log(`[loadSampleImages] Loaded ${images.length} images`)
             setDatasetSampleImages(images)
           } else {
             console.warn("No output dataset ID found for dataset:", selectedDataset.id)
@@ -179,17 +188,23 @@ export function AdversarialAssetManagement() {
       // Transform API response to component format
       const transformedDatasets: AdversarialDataset[] = await Promise.all(
         datasetsData.map(async (d: AttackDatasetAsset) => {
-          // Get the output dataset ID where the actual images are stored
-          const outputDatasetId = d.parameters?.output_dataset_id
+          // FIXED: Get the output dataset ID from the direct field (not parameters)
+          // Backend returns output_dataset_id as a top-level field
+          const outputDatasetId = d.output_dataset_id || d.parameters?.output_dataset_id
+
+          console.log(`[loadDatasets] Dataset ${d.id} (${d.name}): output_dataset_id =`, outputDatasetId)
 
           // Load sample images for each dataset (non-blocking)
           let sampleImages: any[] = []
           if (outputDatasetId) {
             try {
               sampleImages = await fetchDatasetImages(outputDatasetId, 3)
+              console.log(`[loadDatasets] Loaded ${sampleImages.length} sample images for dataset ${outputDatasetId}`)
             } catch (error) {
               console.error(`Failed to load sample images for dataset ${outputDatasetId}:`, error)
             }
+          } else {
+            console.warn(`[loadDatasets] No output_dataset_id found for attack dataset ${d.id}`)
           }
 
           return {
@@ -249,9 +264,6 @@ export function AdversarialAssetManagement() {
     }
   }
 
-  const handleRunEvaluation = (_dataset: AdversarialDataset) => {
-    toast.info("평가 실행 페이지로 이동합니다")
-  }
 
   const filteredPatches = patches.filter(patch => {
     const matchesName = patch.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -473,13 +485,14 @@ export function AdversarialAssetManagement() {
               <div className="grid grid-cols-3 gap-2">
                 {dataset.sampleImages && dataset.sampleImages.length > 0 ? (
                   dataset.sampleImages.slice(0, 3).map((img, i) => {
+                    // Use storage_key to load image via /api/storage endpoint
                     const imageUrl = img.storage_key ? getImageUrlByStorageKey(img.storage_key) : ''
                     return (
                       <div key={img.id || i} className="aspect-square bg-slate-900/50 rounded-lg flex items-center justify-center border border-slate-700 overflow-hidden">
                         {imageUrl ? (
                           <img
                             src={imageUrl}
-                            alt={img.file_name || `Sample ${i + 1}`}
+                            alt={img.filename || img.file_name || `Sample ${i + 1}`}
                             className="w-full h-full object-cover"
                             onError={(e) => {
                               console.error('[Image Error] Failed to load:', imageUrl, 'for image:', img)
@@ -558,15 +571,6 @@ export function AdversarialAssetManagement() {
                     다운로드
                   </Button>
                 </div>
-
-                <Button
-                  size="sm"
-                  onClick={() => handleRunEvaluation(dataset)}
-                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800"
-                >
-                  <PlayCircle className="w-3 h-3 mr-1" />
-                  평가 실행
-                </Button>
 
                 <Button
                   size="sm"
@@ -932,13 +936,14 @@ export function AdversarialAssetManagement() {
                     <div className="grid grid-cols-4 gap-2 mb-3">
                       {datasetSampleImages.length > 0 ? (
                         datasetSampleImages.slice(imageCarouselPage * 8, (imageCarouselPage + 1) * 8).map((img, i) => {
+                          // Use storage_key to load image via /api/storage endpoint
                           const imageUrl = img.storage_key ? getImageUrlByStorageKey(img.storage_key) : ''
                           return (
                             <div key={img.id || i} className="aspect-square bg-slate-900/50 rounded-lg flex items-center justify-center border border-slate-700 overflow-hidden">
                               {imageUrl ? (
                                 <img
                                   src={imageUrl}
-                                  alt={img.file_name || `Sample ${i + 1}`}
+                                  alt={img.filename || img.file_name || `Sample ${i + 1}`}
                                   className="w-full h-full object-cover"
                                   onError={(e) => {
                                     console.error('[Modal Image Error] Failed to load:', imageUrl, 'for image:', img)
@@ -1018,16 +1023,6 @@ export function AdversarialAssetManagement() {
                 >
                   <Download className="w-4 h-4 mr-2" />
                   다운로드
-                </Button>
-                <Button
-                  onClick={() => {
-                    handleRunEvaluation(selectedDataset)
-                    setShowDatasetDetails(false)
-                  }}
-                  className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800"
-                >
-                  <PlayCircle className="w-4 h-4 mr-2" />
-                  평가 실행
                 </Button>
               </>
             )}

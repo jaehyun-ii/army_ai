@@ -508,9 +508,9 @@ class NoiseOSFDPyTorch(EvasionAttack):
             self._feature_extractor = None
 
         logger.info("OSFD generation completed")
-        if return_perturbation:
-            return x_adv, self._perturbation
-        return x_adv
+        # Always return perturbation for service compatibility
+        # (service code expects tuple to extract perturbation)
+        return x_adv, self._perturbation
 
     def _train_osfd_perturbation_pytorch(self, x: torch.Tensor):
         """
@@ -783,3 +783,12 @@ class NoiseOSFDPyTorch(EvasionAttack):
         self._perturbation_torch = nn.Parameter(
             torch.from_numpy(perturbation).float().to(self.device)
         )
+
+    def _enforce_epsilon(self, eps: float) -> None:
+        """
+        Project perturbation into L_inf ball of radius `eps` (same scale as internal tensors).
+        """
+        if self._perturbation_torch is None:
+            return
+        # Clamp around 0 since perturbation is additive
+        self._perturbation_torch.data = torch.clamp(self._perturbation_torch.data, -eps, eps)

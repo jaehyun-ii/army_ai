@@ -101,6 +101,10 @@ class CRUDDelete(Generic[ModelType]):
         await db.flush()
         return result.rowcount > 0
 
+    async def remove(self, db: AsyncSession, *, id: UUID) -> bool:
+        """Remove a record (alias for soft_delete)."""
+        return await self.soft_delete(db, id=id)
+
 
 class CRUDBase(
     CRUDRead[ModelType],

@@ -46,6 +46,25 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
         if self.training:
             if targets is None:
                 raise ValueError("Targets should not be None when training.")
+
+            # Align model/loss buffers with incoming tensor device to avoid CPU/GPU mix
+            device = x.device
+            self.model.to(device)
+            if hasattr(self.model, "criterion"):
+                criterion = self.model.criterion
+                # v8DetectionLoss may not implement .to(), so guard it
+                if hasattr(criterion, "to"):
+                    criterion.to(device)
+                # ultralytics loss keeps `proj` as a plain tensor (not registered buffer)
+                if hasattr(criterion, "proj"):
+                    criterion.proj = criterion.proj.to(device)
+                # Some helpers (assigner) track device manually
+                if hasattr(criterion, "assigner") and hasattr(criterion.assigner, "device"):
+                    criterion.assigner.device = device
+
+            # Ensure targets tensor is on the same device
+            targets = targets.to(device)
+
             items = {}
             items["batch_idx"] = targets[:, 0]
             items["bboxes"] = targets[:, 2:6]

@@ -298,9 +298,9 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         self._perturbation = self._torch_to_numpy(self._perturbation_torch, x)
 
         logger.info("Universal Noise generation completed")
-        if return_perturbation:
-            return x_adv, self._perturbation
-        return x_adv
+        # Always return perturbation for service compatibility
+        # (service code expects tuple to extract perturbation)
+        return x_adv, self._perturbation
 
     def _train_universal_perturbation_pytorch(
         self,
@@ -387,18 +387,11 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
 
                 # Apply perturbation
                 if self.apply_mask:
-                    x_adv_batch = self._apply_perturbation_with_mask(x_batch, y_batch_torch)
+                    # For masking, need y_batch_torch with tensors on correct device
+                    y_batch_torch_device = [{k: v.to(self.device) for k, v in y_i.items()} for y_i in y_batch_torch]
+                    x_adv_batch = self._apply_perturbation_with_mask(x_batch, y_batch_torch_device)
                 else:
                     x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, self.clip_min, self.clip_max)
-
-                # Convert to numpy for ART interface
-                x_adv_numpy = x_adv_batch.detach().cpu().numpy()
-                if not self.estimator.channels_first:
-                    x_adv_numpy = np.transpose(x_adv_numpy, (0, 2, 3, 1))
-
-                # Denormalize if needed
-                if self.estimator.clip_values is not None:
-                    x_adv_numpy = x_adv_numpy * self.estimator.clip_values[1]
 
                 # Filter out samples with empty boxes before calling loss_gradient
                 valid_indices = [i for i, label_dict in enumerate(y_batch_numpy) if len(label_dict.get('boxes', [])) > 0]
@@ -409,16 +402,33 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                     continue
 
                 # Filter x and y to only include valid samples
-                x_adv_numpy_valid = x_adv_numpy[valid_indices]
+                x_adv_batch_valid = x_adv_batch[valid_indices]
                 y_batch_numpy_valid = [y_batch_numpy[i] for i in valid_indices]
 
-                # Use ART's loss_gradient for framework compliance (only for valid samples)
-                gradients_valid = self.estimator.loss_gradient(x=x_adv_numpy_valid, y=y_batch_numpy_valid)
+                # Keep everything on a single device (match other attacks like DPatch)
+                x_adv_batch_valid = x_adv_batch_valid.detach()
 
-                # Convert gradients back to torch
-                if not self.estimator.channels_first:
-                    gradients_valid = np.transpose(gradients_valid, (0, 3, 1, 2))
-                grad_torch_valid = torch.from_numpy(gradients_valid).to(self.device)
+                # Denormalize: internal [0, 1] -> estimator expects [0, clip_max]
+                if self.estimator.clip_values is not None:
+                    x_for_loss = x_adv_batch_valid * self.estimator.clip_values[1]
+                else:
+                    x_for_loss = x_adv_batch_valid
+
+                gradients_valid = self.estimator.loss_gradient(x=x_for_loss, y=y_batch_numpy_valid)
+
+                # Ensure gradients are torch tensors on the correct device
+                if isinstance(gradients_valid, np.ndarray):
+                    grad_torch_valid = torch.from_numpy(gradients_valid).to(self.device)
+                else:
+                    grad_torch_valid = gradients_valid.to(self.device)
+
+                # Ensure channel order matches internal representation
+                if not self.estimator.channels_first and grad_torch_valid.ndim == 4:
+                    grad_torch_valid = grad_torch_valid.permute(0, 3, 1, 2)
+
+                # Normalize gradients back to [0, 1] space (our internal optimization space)
+                if self.estimator.clip_values is not None:
+                    grad_torch_valid = grad_torch_valid / self.estimator.clip_values[1]
 
                 # Gradient ascent: update perturbation to maximize loss
                 # Average gradients across valid samples only
@@ -432,7 +442,7 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                     self._enforce_epsilon(self.eps)
 
                 if i_iter == 0 and batch_id == 0:
-                    logger.info(f"Using ART loss_gradient: grad shape={grad_torch.shape}, norm={grad_torch.norm():.4f}")
+                    logger.info(f"Using ART loss_gradient: grad shape={grad_torch_valid.shape}, norm={grad_torch_valid.norm():.4f}")
 
             if self.verbose and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
                 logger.info(f"Iter {i_iter}/{self.max_iter}: Perturbation norm = {self._perturbation_torch.norm().item():.6f}")
@@ -523,6 +533,8 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         x_torch, _ = self.estimator._preprocess_and_convert_inputs(
             x=x, y=None, fit=False, no_grad=True
         )
+        # Move to the estimator device explicitly to avoid mixed CPU/GPU tensors later
+        x_torch = x_torch.to(self.device)
         logger.debug(f"Input converted to torch: {x_torch.shape}, device: {x_torch.device}")
         return x_torch, x
 
@@ -579,3 +591,12 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         self._perturbation_torch = nn.Parameter(
             torch.from_numpy(perturbation).float().to(self.device)
         )
+
+    def _enforce_epsilon(self, eps: float) -> None:
+        """
+        Project perturbation into L_inf ball of radius `eps` (same scale as internal tensors).
+        """
+        if self._perturbation_torch is None:
+            return
+        # Clamp around 0 since perturbation is additive
+        self._perturbation_torch.data = torch.clamp(self._perturbation_torch.data, -eps, eps)
