@@ -1,0 +1,217 @@
+"""
+System statistics endpoints.
+Provides HTTP and SSE endpoints for real-time system monitoring.
+"""
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, StreamingResponse, PlainTextResponse
+from typing import Optional
+import logging
+import asyncio
+import json
+import subprocess
+
+from app.services.system_stats_service import system_stats_service
+from app.services.realtime_service import realtime_service
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+@router.get("/stats")
+async def get_system_stats():
+    """
+    Get current system statistics snapshot.
+
+    Returns:
+        JSON containing CPU, memory, disk, GPU, network, and process stats
+    """
+    try:
+        stats = system_stats_service.get_all_stats()
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting system stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve system statistics", "detail": str(e)}
+        )
+
+
+@router.get("/stats/stream")
+async def stream_system_stats(request: Request, interval: Optional[float] = 1.0):
+    """
+    SSE endpoint for streaming system statistics.
+
+    Query Parameters:
+        interval: Update interval in seconds (default: 1.0)
+
+    Returns:
+        Server-Sent Events stream containing system stats at the specified interval
+    """
+    async def event_generator():
+        """Generate SSE events with system stats"""
+        try:
+            logger.info(f"SSE connected for system stats (interval: {interval}s)")
+
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    logger.info("Client disconnected")
+                    break
+
+                # If camera capture is active, pause sending stats but keep connection alive
+                if realtime_service.active_captures:
+                    yield f": paused - camera active\n\n"
+                    await asyncio.sleep(interval)
+                    continue
+
+                try:
+                    stats = system_stats_service.get_all_stats()
+                    data = json.dumps(stats)
+                    yield f"data: {data}\n\n"
+                except Exception as e:
+                    logger.error(f"Error formatting stats for SSE: {e}", exc_info=True)
+                    break
+
+                await asyncio.sleep(interval)
+
+        except asyncio.CancelledError:
+            logger.info("SSE stream cancelled (server shutdown or client disconnect)")
+            raise
+        except Exception as e:
+            logger.error(f"SSE streaming error: {e}", exc_info=True)
+        finally:
+            logger.info("SSE stream ended for system stats")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
+
+@router.get("/stats/cpu")
+async def get_cpu_stats():
+    """Get CPU statistics only."""
+    try:
+        stats = system_stats_service.get_cpu_stats()
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting CPU stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve CPU statistics", "detail": str(e)}
+        )
+
+
+@router.get("/stats/memory")
+async def get_memory_stats():
+    """Get memory statistics only."""
+    try:
+        stats = system_stats_service.get_memory_stats()
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting memory stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve memory statistics", "detail": str(e)}
+        )
+
+
+@router.get("/stats/gpu")
+async def get_gpu_stats():
+    """Get GPU statistics only (if available)."""
+    try:
+        stats = system_stats_service.get_gpu_stats()
+        if stats is None:
+            return JSONResponse(content={"available": False, "message": "No GPU detected"})
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting GPU stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve GPU statistics", "detail": str(e)}
+        )
+
+
+@router.get("/stats/disk")
+async def get_disk_stats():
+    """Get disk statistics only."""
+    try:
+        stats = system_stats_service.get_disk_stats()
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting disk stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve disk statistics", "detail": str(e)}
+        )
+
+
+@router.get("/stats/network")
+async def get_network_stats():
+    """Get network statistics only."""
+    try:
+        stats = system_stats_service.get_network_stats()
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"Error getting network stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve network statistics", "detail": str(e)}
+        )
+
+
+@router.get("/debug/nvidia-smi")
+async def debug_nvidia_smi():
+    """Debug endpoint to view raw nvidia-smi output."""
+    try:
+        # Run nvidia-smi with XML output
+        result = subprocess.run(
+            ['nvidia-smi', '-q', '-x'],
+            capture_output=True,
+            timeout=5,
+            text=True
+        )
+
+        return PlainTextResponse(
+            content=f"=== nvidia-smi -q -x ===\nReturn code: {result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}",
+            media_type="text/plain"
+        )
+    except Exception as e:
+        return PlainTextResponse(
+            content=f"Error running nvidia-smi: {str(e)}",
+            status_code=500
+        )
+
+
+@router.get("/debug/gputil")
+async def debug_gputil():
+    """Debug endpoint to view GPUtil output."""
+    try:
+        import GPUtil
+        gpus = GPUtil.getGPUs()
+
+        debug_info = f"GPUtil found {len(gpus)} GPU(s)\n\n"
+
+        for gpu in gpus:
+            debug_info += f"GPU {gpu.id}:\n"
+            debug_info += f"  Name: {gpu.name}\n"
+            debug_info += f"  Load: {gpu.load}\n"
+            debug_info += f"  Memory Total: {gpu.memoryTotal} MB\n"
+            debug_info += f"  Memory Used: {gpu.memoryUsed} MB\n"
+            debug_info += f"  Memory Free: {gpu.memoryFree} MB\n"
+            debug_info += f"  Temperature: {gpu.temperature} C\n"
+            debug_info += f"  UUID: {gpu.uuid}\n"
+            debug_info += "\n"
+
+        return PlainTextResponse(content=debug_info)
+    except Exception as e:
+        return PlainTextResponse(
+            content=f"Error with GPUtil: {str(e)}",
+            status_code=500
+        )

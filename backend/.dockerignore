@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+venv_check/
+env/
+ENV/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Storage (runtime data)
+storage/
+
+# Documentation
+docs/
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+tmp/
+temp/

@@ -1,0 +1,280 @@
+@import "tailwindcss";
+
+/* ========================================
+   CSS 변수 연결 (Tailwind <-> Theme System)
+   ======================================== */
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* ============================================================
+     배경 및 전경색 (App Background)
+     ============================================================ */
+  --color-background: var(--md-sys-color-background);
+  --color-foreground: var(--md-sys-color-on-background);
+  --color-on-surface: var(--md-sys-color-on-surface);
+  --color-on-surface-variant: var(--md-sys-color-on-surface-variant);
+
+  /* ============================================================
+     서피스 - 5단계 elevation 시스템
+     ============================================================ */
+  --color-surface: var(--md-sys-color-surface);
+  --color-surface-dim: var(--md-sys-color-surface-dim);
+  --color-surface-bright: var(--md-sys-color-surface-bright);
+  --color-surface-container-lowest: var(--md-sys-color-surface-container-lowest);
+  --color-surface-container-low: var(--md-sys-color-surface-container-low);
+  --color-surface-container: var(--md-sys-color-surface-container);
+  --color-surface-container-high: var(--md-sys-color-surface-container-high);
+  --color-surface-container-highest: var(--md-sys-color-surface-container-highest);
+  --color-surface-variant: var(--md-sys-color-surface-variant);
+  --color-surface-tint: var(--md-sys-color-surface-tint);
+
+  /* ============================================================
+     Primary 색상 시스템 (브랜드 주요 색상)
+     ============================================================ */
+  --color-primary: var(--md-sys-color-primary);
+  --color-primary-foreground: var(--md-sys-color-on-primary);
+  --color-primary-container: var(--md-sys-color-primary-container);
+  --color-on-primary-container: var(--md-sys-color-on-primary-container);
+
+  /* Primary Fixed - 테마 독립적 색상 */
+  --color-primary-fixed: var(--md-sys-color-primary-fixed);
+  --color-primary-fixed-dim: var(--md-sys-color-primary-fixed-dim);
+  --color-on-primary-fixed: var(--md-sys-color-on-primary-fixed);
+  --color-on-primary-fixed-variant: var(--md-sys-color-on-primary-fixed-variant);
+
+  /* ============================================================
+     Secondary 색상 시스템 (보조 UI 요소)
+     ============================================================ */
+  --color-secondary: var(--md-sys-color-secondary);
+  --color-secondary-foreground: var(--md-sys-color-on-secondary);
+  --color-secondary-container: var(--md-sys-color-secondary-container);
+  --color-on-secondary-container: var(--md-sys-color-on-secondary-container);
+
+  /* Secondary Fixed */
+  --color-secondary-fixed: var(--md-sys-color-secondary-fixed);
+  --color-secondary-fixed-dim: var(--md-sys-color-secondary-fixed-dim);
+  --color-on-secondary-fixed: var(--md-sys-color-on-secondary-fixed);
+  --color-on-secondary-fixed-variant: var(--md-sys-color-on-secondary-fixed-variant);
+
+  /* ============================================================
+     Tertiary 색상 시스템 (강조/액센트)
+     ============================================================ */
+  --color-tertiary: var(--md-sys-color-tertiary);
+  --color-tertiary-foreground: var(--md-sys-color-on-tertiary);
+  --color-tertiary-container: var(--md-sys-color-tertiary-container);
+  --color-on-tertiary-container: var(--md-sys-color-on-tertiary-container);
+
+  /* Tertiary Fixed */
+  --color-tertiary-fixed: var(--md-sys-color-tertiary-fixed);
+  --color-tertiary-fixed-dim: var(--md-sys-color-tertiary-fixed-dim);
+  --color-on-tertiary-fixed: var(--md-sys-color-on-tertiary-fixed);
+  --color-on-tertiary-fixed-variant: var(--md-sys-color-on-tertiary-fixed-variant);
+
+  /* ============================================================
+     Error 색상 시스템 (오류 및 경고)
+     ============================================================ */
+  --color-error: var(--md-sys-color-error);
+  --color-error-foreground: var(--md-sys-color-on-error);
+  --color-error-container: var(--md-sys-color-error-container);
+  --color-on-error-container: var(--md-sys-color-on-error-container);
+  --color-destructive: var(--md-sys-color-error); /* shadcn 호환 */
+  --color-destructive-foreground: var(--md-sys-color-on-error);
+
+  /* ============================================================
+     Inverse 색상 시스템 (다크/라이트 전환용)
+     ============================================================ */
+  --color-inverse-surface: var(--md-sys-color-inverse-surface);
+  --color-inverse-on-surface: var(--md-sys-color-inverse-on-surface);
+  --color-inverse-primary: var(--md-sys-color-inverse-primary);
+
+  /* ============================================================
+     테두리 및 구분선
+     ============================================================ */
+  --color-border: var(--md-sys-color-outline);
+  --color-outline: var(--md-sys-color-outline);
+  --color-outline-variant: var(--md-sys-color-outline-variant);
+  --color-input: var(--md-sys-color-outline);
+  --color-ring: var(--md-sys-color-primary);
+
+  /* ============================================================
+     Shadow & Scrim (오버레이/그림자)
+     ============================================================ */
+  --color-shadow: var(--md-sys-color-shadow);
+  --color-scrim: var(--md-sys-color-scrim);
+
+  /* ============================================================
+     Custom Status Colors (MD3 외 추가 색상)
+     ============================================================ */
+  --color-success: #10b981; /* Emerald-500 */
+  --color-success-foreground: #ffffff;
+  --color-warning: #f59e0b; /* Amber-500 */
+  --color-warning-foreground: #ffffff;
+  --color-info: #3b82f6; /* Blue-500 */
+  --color-info-foreground: #ffffff;
+  
+  /* 애니메이션 */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from { height: 0 }
+    to { height: var(--radix-accordion-content-height) }
+  }
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height) }
+    to { height: 0 }
+  }
+}
+
+/* ========================================
+   기본 스타일 (Base Reset)
+   ======================================== */
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html {
+    /* 부드러운 스크롤 */
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased transition-colors duration-300;
+  }
+
+  /* 헤딩 스타일 */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold text-foreground;
+  }
+}
+
+/* ========================================
+   유틸리티 클래스 (Custom Utilities)
+   ======================================== */
+@layer utilities {
+  /* Surface Elevation Utilities */
+  .surface-lowest {
+    background-color: var(--md-sys-color-surface-container-lowest);
+  }
+
+  .surface-low {
+    background-color: var(--md-sys-color-surface-container-low);
+  }
+
+  .surface-base {
+    background-color: var(--md-sys-color-surface-container);
+  }
+
+  .surface-high {
+    background-color: var(--md-sys-color-surface-container-high);
+  }
+
+  .surface-highest {
+    background-color: var(--md-sys-color-surface-container-highest);
+  }
+
+  /* Surface Background Utilities (bg- prefix aliases) */
+  .bg-surface-dim { background-color: var(--md-sys-color-surface-dim); }
+  .bg-surface-bright { background-color: var(--md-sys-color-surface-bright); }
+  .bg-surface-container-lowest { background-color: var(--md-sys-color-surface-container-lowest); }
+  .bg-surface-container-low { background-color: var(--md-sys-color-surface-container-low); }
+  .bg-surface-container { background-color: var(--md-sys-color-surface-container); }
+  .bg-surface-container-high { background-color: var(--md-sys-color-surface-container-high); }
+  .bg-surface-container-highest { background-color: var(--md-sys-color-surface-container-highest); }
+  .bg-surface-variant { background-color: var(--md-sys-color-surface-variant); }
+
+  /* Container Background Utilities */
+  .bg-primary-container {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+  }
+
+  .bg-secondary-container {
+    background-color: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+
+  .bg-tertiary-container {
+    background-color: var(--md-sys-color-tertiary-container);
+    color: var(--md-sys-color-on-tertiary-container);
+  }
+
+  .bg-error-container {
+    background-color: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+  }
+
+  /* Inverse Theme Utilities */
+  .bg-inverse {
+    background-color: var(--md-sys-color-inverse-surface);
+    color: var(--md-sys-color-inverse-on-surface);
+  }
+
+  /* Text Color Utilities */
+  .text-muted {
+    color: var(--md-sys-color-on-surface-variant);
+  }
+
+  .text-on-primary-container {
+    color: var(--md-sys-color-on-primary-container);
+  }
+
+  .text-on-secondary-container {
+    color: var(--md-sys-color-on-secondary-container);
+  }
+
+  .text-on-tertiary-container {
+    color: var(--md-sys-color-on-tertiary-container);
+  }
+
+  .text-success { color: var(--color-success); }
+  .text-warning { color: var(--color-warning); }
+  .text-info { color: var(--color-info); }
+  .text-error { color: var(--color-error); }
+
+  /* Border Utilities */
+  .border-variant {
+    border-color: var(--md-sys-color-outline-variant);
+  }
+
+  .border-subtle {
+    border-color: var(--md-sys-color-outline-variant);
+  }
+
+  /* Shadow & Scrim Utilities */
+  .shadow-scrim {
+    box-shadow: 0 0 0 100vmax var(--md-sys-color-scrim);
+  }
+
+  /* Fixed Color Utilities (theme-independent) */
+  .bg-primary-fixed {
+    background-color: var(--md-sys-color-primary-fixed);
+    color: var(--md-sys-color-on-primary-fixed);
+  }
+
+  .bg-primary-fixed-dim {
+    background-color: var(--md-sys-color-primary-fixed-dim);
+    color: var(--md-sys-color-on-primary-fixed);
+  }
+
+  .bg-secondary-fixed {
+    background-color: var(--md-sys-color-secondary-fixed);
+    color: var(--md-sys-color-on-secondary-fixed);
+  }
+
+  .bg-tertiary-fixed {
+    background-color: var(--md-sys-color-tertiary-fixed);
+    color: var(--md-sys-color-on-tertiary-fixed);
+  }
+
+  /* Button Utilities */
+  .ds-btn-primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 h-9 px-4 py-2;
+  }
+  
+  .ds-btn-outline {
+    @apply border border-input bg-transparent text-foreground shadow-sm hover:bg-secondary-container hover:text-on-secondary-container inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 h-9 px-4 py-2;
+  }
+}

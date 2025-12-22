@@ -1,0 +1,108 @@
+/* Common component styles to reduce repetition with design tokens */
+
+/* Card Styles */
+.card-primary { @apply rounded-xl border border-border bg-[var(--surface-strong)] text-foreground shadow-sm; }
+.card-secondary { @apply rounded-xl border border-border bg-[var(--surface)] text-foreground shadow-sm; }
+.card-dark { @apply rounded-xl border border-border bg-[var(--surface)] text-foreground shadow-sm; }
+
+/* Input Styles */
+.input-primary { @apply h-10 w-full rounded-lg border border-border bg-[var(--surface-strong)] px-3 py-2 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition; }
+.input-auth { @apply h-12 w-full rounded-lg border border-border bg-[var(--surface)] px-3 py-2 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition; }
+
+/* Button Styles */
+.btn-primary-gradient { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-primary to-accent px-4 text-primary-foreground font-medium hover:from-primary/90 hover:to-accent/90 transition; }
+.btn-secondary { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-border px-4 text-foreground font-medium hover:bg-[var(--surface-strong)] transition; }
+
+/* Badge Styles */
+.badge-success { @apply inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); border-color: var(--md-sys-color-secondary); }
+.badge-warning { @apply inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium; background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container); border-color: var(--md-sys-color-tertiary); }
+.badge-error { @apply inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium; background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); border-color: var(--md-sys-color-error); }
+
+/* Stat Card Styles */
+.stat-card { @apply rounded-lg p-3 bg-[var(--surface-strong)] text-foreground; }
+
+/* Table Row Styles */
+.table-row-hover { @apply transition-colors cursor-pointer hover:bg-[var(--surface-strong)]; }
+.table-row-selected { @apply border border-border bg-[var(--surface-strong)] shadow-sm; }
+
+/* Modal/Dialog Overlay */
+.overlay-dark { @apply bg-black/80 backdrop-blur-sm; }
+
+/* Progress Bar Container */
+.progress-container { @apply rounded-full overflow-hidden bg-[var(--surface-strong)]; }
+
+/* Separator Line */
+.separator-light { @apply bg-border; }
+
+/* Text Styles */
+.text-muted { @apply text-muted-foreground; }
+.text-label { @apply text-foreground font-medium; }
+
+/* Container Styles */
+.container-scroll { @apply overflow-hidden h-full; }
+
+/* Grid Layouts */
+.grid-stat-3 { @apply grid grid-cols-3 gap-4; }
+.grid-stat-4 { @apply grid grid-cols-4 gap-4; }
+
+/* === Design System Helpers (reintroduced) === */
+.ds-page { @apply max-w-6xl mx-auto p-4 flex flex-col gap-4; }
+.ds-section { @apply flex flex-col gap-4; }
+.ds-subtext { @apply text-sm text-muted-foreground; }
+.ds-text-muted { @apply text-muted-foreground; }
+.ds-heading { @apply text-lg font-semibold text-foreground; }
+.ds-heading-lg { @apply text-xl font-semibold text-foreground; }
+.ds-stat-value { @apply text-2xl font-bold text-foreground; }
+.ds-stat-card-content { @apply flex items-center justify-between gap-2; }
+.ds-flex-center { @apply flex items-center justify-center; }
+.ds-toolbar-actions { @apply flex items-center gap-2; }
+
+/* Cards & Panels */
+.ds-card { @apply rounded-xl border border-border bg-[var(--surface-strong)] text-foreground shadow-sm; }
+.ds-card-secondary { @apply rounded-xl border border-border bg-[var(--surface)] text-foreground shadow-sm; }
+.ds-card-dark { @apply rounded-xl border border-border bg-[var(--surface)] text-foreground shadow-sm; }
+.ds-panel { @apply rounded-xl border border-border bg-[var(--surface)] text-foreground shadow-sm; }
+
+/* Forms */
+.ds-input { @apply h-10 w-full rounded-lg border border-border bg-[var(--surface-strong)] px-3 py-2 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition; }
+.ds-select-trigger { @apply h-10 w-full rounded-lg border border-border bg-[var(--surface-strong)] px-3 text-foreground justify-between focus-visible:ring-2 focus-visible:ring-ring; }
+.ds-select-content { @apply rounded-lg border border-border bg-[var(--surface)] text-foreground; }
+
+/* Tabs */
+.ds-tabs { @apply w-full; }
+.ds-tabs-list { @apply inline-flex h-11 items-center justify-center rounded-lg border border-border bg-[var(--surface-strong)] p-1 gap-1; }
+.ds-tabs-trigger { @apply inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-all data-[state=active]:bg-[var(--surface)] data-[state=active]:text-foreground data-[state=active]:shadow-sm; }
+
+/* Tables */
+.ds-table { @apply w-full; }
+.ds-table-header { @apply bg-[var(--surface-strong)]; }
+.ds-table-head { @apply text-left text-xs uppercase tracking-wide text-muted-foreground; }
+.ds-table-row { @apply border-b border-border hover:bg-[var(--surface-strong)]; }
+.ds-table-cell { @apply py-3 text-sm text-foreground; }
+
+/* Buttons - Design System */
+.ds-btn-primary { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-primary-foreground font-medium hover:bg-primary/90 transition shadow-sm disabled:bg-surface-dim disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+.ds-btn-secondary { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-secondary px-4 text-secondary-foreground font-medium hover:bg-secondary/90 transition shadow-sm disabled:bg-surface-dim disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+.ds-btn-tertiary { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-tertiary px-4 text-tertiary-foreground font-medium hover:bg-tertiary/90 transition shadow-sm disabled:bg-surface-dim disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+.ds-btn-danger { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-error px-4 text-on-error font-medium hover:bg-error/90 transition shadow-sm disabled:bg-surface-dim disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+.ds-btn-outline { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-outline bg-transparent px-4 text-foreground font-medium hover:bg-surface-variant transition shadow-sm disabled:bg-surface-dim disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+.ds-btn-ghost { @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-foreground font-medium hover:bg-surface-container-high transition disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+.ds-btn-icon { @apply inline-flex size-10 items-center justify-center rounded-lg text-foreground font-medium hover:bg-surface-container-high transition disabled:text-on-surface-variant disabled:cursor-not-allowed disabled:opacity-50; }
+
+/* Alerts */
+.ds-alert { @apply relative w-full rounded-lg border px-4 py-3 flex items-start gap-3; background: var(--surface); color: var(--foreground); border-color: var(--border); }
+.ds-alert-info { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); border-color: var(--md-sys-color-primary); }
+.ds-alert-success { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); border-color: var(--md-sys-color-secondary); }
+.ds-alert-warning { background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container); border-color: var(--md-sys-color-tertiary); }
+.ds-alert-error { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); border-color: var(--md-sys-color-error); }
+
+/* Progress */
+.ds-progress-track { @apply h-2 w-full overflow-hidden rounded-full bg-[var(--surface-strong)]; }
+.ds-progress-indicator { @apply h-full rounded-full bg-primary transition-all; }
+
+/* Tables (hover refinement) */
+.ds-table-row { @apply border-b border-border hover:bg-[var(--surface-strong)] transition-colors; }
+
+/* Switch */
+.ds-switch { @apply peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent bg-border transition-colors data-[state=checked]:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring; }
+.ds-switch-thumb { @apply pointer-events-none block h-5 w-5 rounded-full bg-foreground shadow-lg ring-0 transition-transform translate-x-0 data-[state=checked]:translate-x-5; }

@@ -1,0 +1,225 @@
+# ===============================================
+# Army AI Platform - Development Docker Compose
+# ===============================================
+# Hot reload enabled for rapid development
+# Usage: docker-compose -f docker-compose.dev.yml up
+# ===============================================
+
+services:
+  # =====================
+  # PostgreSQL Database
+  # =====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: army_ai_postgres_dev
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+      - ./database/complete_schema.sql:/schema/complete_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - army_ai_network_dev
+
+  # =====================
+  # Backend (FastAPI) - GPU Enabled
+  # Development mode with code hot reload
+  # =====================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: army_ai_backend_dev
+    container_name: army_ai_backend_dev
+    restart: unless-stopped
+    ipc: host  # Shared memory for PyTorch
+    pid: host  # Access host processes for system monitoring
+    ulimits:
+      memlock: -1  # Unlimited memory locking
+      stack: 67108864  # 64MB stack size
+    env_file:
+      - .env
+    environment:
+      # NVIDIA/CUDA
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+      # CARLA Backend
+      CARLA_BACKEND_URL: http://${CARLA_BACKEND_HOST}:${CARLA_BACKEND_PORT}
+
+      # Security
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+
+      # Application
+      APP_NAME: ${APP_NAME}
+      DEBUG: "True"  # Development mode
+      API_PREFIX: ${API_PREFIX}
+      LOG_LEVEL: DEBUG  # More verbose logging
+      ENVIRONMENT: development
+
+      # Storage
+      STORAGE_ROOT: /storage
+      STORAGE_TYPE: ${STORAGE_TYPE}
+
+      # PyTorch/CUDA
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
+
+      # System monitoring - use host /proc for accurate stats
+      PROCFS_PATH: /host/proc
+      CGROUPFS_PATH: /host/sys/fs/cgroup
+
+    ports:
+      - "${BACKEND_PORT}:8000"
+    volumes:
+      - ./storage:/storage:rw
+      - ./backups:/backups:rw
+      - backend_logs_dev:/app/logs
+      # Hot reload: mount source code (uncomment if backend supports hot reload)
+      - ./backend:/app:rw
+      # Host system monitoring - required for accurate CPU/memory stats
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    devices:
+      # Camera devices access
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
+      - /dev/video2:/dev/video2
+      - /dev/video3:/dev/video3
+    privileged: true  # Required for camera access
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - army_ai_network_dev
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # =====================
+  # Frontend (Next.js) - Development Mode
+  # Hot reload enabled with volume mounts
+  # =====================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      args:
+        NODE_ENV: development
+    image: army_ai_frontend_dev
+    container_name: army_ai_frontend_dev
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Database (내부 통신용)
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${INTERNAL_POSTGRES_URL}/${POSTGRES_DB}?schema=public
+
+      # Auth
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      JWT_SECRET: ${JWT_SECRET}
+      NODE_ENV: development  # Development mode
+
+      # API URLs (브라우저에서 접속 - 클라이언트사이드)
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_BACKEND_API_URL: ${NEXT_PUBLIC_API_URL}
+
+      # Backend URL (서버사이드 API 라우트 통신용)
+      BACKEND_API_URL: ${INTERNAL_BACKEND_URL}
+      BACKEND_URL: ${INTERNAL_BACKEND_URL}
+      CARLA_BACKEND_URL: http://${CARLA_BACKEND_HOST}:${CARLA_BACKEND_PORT}
+
+      # Storage
+      STORAGE_ROOT: /storage
+
+      # Next.js Dev Server
+      WATCHPACK_POLLING: "true"  # Enable file watching in Docker
+      CHOKIDAR_USEPOLLING: "true"  # Fallback file watching
+
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    volumes:
+      # Hot reload: mount source code
+      - ./frontend:/app:rw
+      # Use named volume for node_modules to improve performance
+      - frontend_node_modules:/app/node_modules
+      # Persistent volumes
+      - frontend_uploads_dev:/app/uploads
+      - frontend_logs_dev:/app/logs
+      # Cache for Next.js
+      - frontend_next_cache:/app/.next
+      # Shared storage for images (same as backend)
+      - ./storage:/storage:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - army_ai_network_dev
+    command: npm run dev
+
+# =====================
+# Networks
+# =====================
+networks:
+  army_ai_network_dev:
+    driver: bridge
+    name: army_ai_network_dev
+
+# =====================
+# Volumes
+# =====================
+volumes:
+  postgres_data_dev:
+    driver: local
+    name: army_ai_postgres_data_dev
+
+  backend_logs_dev:
+    driver: local
+    name: army_ai_backend_logs_dev
+
+  frontend_node_modules:
+    driver: local
+    name: army_ai_frontend_node_modules
+
+  frontend_uploads_dev:
+    driver: local
+    name: army_ai_frontend_uploads_dev
+
+  frontend_logs_dev:
+    driver: local
+    name: army_ai_frontend_logs_dev
+
+  frontend_next_cache:
+    driver: local
+    name: army_ai_frontend_next_cache 

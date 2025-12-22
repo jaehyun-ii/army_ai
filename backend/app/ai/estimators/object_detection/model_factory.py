@@ -1,0 +1,620 @@
+"""
+Model factory for loading object detection models from .pt files.
+
+Automatically detects model type and wraps with appropriate estimator.
+Supports custom class mappings for models trained with different class orders.
+"""
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+import torch
+
+from app.ai.estimators.object_detection import (
+    PyTorchYolo,
+    PyTorchRTDETR,
+    PyTorchFasterRCNN,
+    PyTorchEfficientDet,
+)
+from app.ai.estimators.object_detection.class_mapper import (
+    ClassMapper,
+    detect_class_format,
+    COCO_CLASSES,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _register_custom_mmdet_modules():
+    """Register custom MMDetection modules (EfficientDetIncre, etc.)."""
+    try:
+        # Import MMDetection registry first
+        from mmdet.registry import MODELS
+
+        # Check if already registered
+        if 'EfficientDetIncre' in MODELS.module_dict:
+            logger.info("EfficientDetIncre already registered")
+            return True
+
+        # First, try to import standard EfficientDet project modules from mmdetection
+        # This will also register Conv2dSamePadding and BiFPN
+        efficientdet_imported = False
+        try:
+            import sys
+            import os
+            # Add mmdetection projects to path (Docker container path)
+            mmdet_projects_paths = [
+                "/opt/mmdetection/projects",
+                "/app/mmdetection/projects",
+                "/workspace/mmdetection/projects",
+                "/home/jaehyun/mmdetection/projects"
+            ]
+
+            path_added = False
+            for path in mmdet_projects_paths:
+                if os.path.exists(path):
+                    if path not in sys.path:
+                        sys.path.insert(0, path)
+                        logger.info(f"Added {path} to sys.path")
+                    path_added = True
+                    break # Stop after finding the first valid path
+
+            if not path_added:
+                 logger.warning(f"Could not find mmdetection/projects directory. Checked: {mmdet_projects_paths}")
+                 logger.warning("EfficientDet standard modules might not be loaded.")
+
+            # Import EfficientDet project modules (this registers Conv2dSamePadding, BiFPN, etc.)
+            from EfficientDet.efficientdet import (
+                BiFPN,
+                EfficientDet,
+                EfficientDetSepBNHead,
+                HuberLoss
+            )
+            logger.info("✓ Standard EfficientDet project modules imported successfully")
+            efficientdet_imported = True
+        except Exception as e:
+            logger.warning(f"Could not import standard EfficientDet project: {e}")
+            logger.debug(f"Will attempt to manually register Conv2dSamePadding as fallback")
+            import traceback
+            logger.debug(traceback.format_exc())
+
+        # --- Fallback: Register Conv2dSamePadding manually if EfficientDet import failed ---
+        # Only do this if the standard EfficientDet modules couldn't be imported
+        if not efficientdet_imported:
+            try:
+                from mmcv.cnn import Conv2d
+                import torch.nn.functional as F
+                import math
+
+                # Check if already registered
+                if 'Conv2dSamePadding' not in MODELS.module_dict:
+                    @MODELS.register_module(name='Conv2dSamePadding', force=True)
+                    class Conv2dSamePadding(Conv2d):
+                        """Wrapper for Conv2d with 'SAME' padding mode matching TensorFlow."""
+                        def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1, groups=1, bias=True, padding=0, **kwargs):
+                            super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
+                            self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]]*2
+                            self.kernel_size = self.kernel_size if len(self.kernel_size) == 2 else [self.kernel_size[0]]*2
+                            self.dilation = self.dilation if len(self.dilation) == 2 else [self.dilation[0]]*2
+
+                        def forward(self, x):
+                            ih, iw = x.size()[-2:]
+                            kh, kw = self.kernel_size
+                            sh, sw = self.stride
+                            oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)
+                            pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
+                            pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
+                            if pad_h > 0 or pad_w > 0:
+                                x = F.pad(x, [pad_w//2, pad_w - pad_w//2, pad_h//2, pad_h - pad_h//2])
+                            return super().forward(x)
+                    logger.info("✓ Registered Conv2dSamePadding manually (fallback)")
+            except Exception as e:
+                 logger.warning(f"Failed to manually register Conv2dSamePadding: {e}")
+                 import traceback
+                 logger.debug(traceback.format_exc())
+        # ------------------------------------------------------------
+
+        # Import custom incremental learning modules to trigger registration
+        from app.ai.models.efficientdet_incre import (
+            EfficientDetIncre,
+            EfficientDetSepBNHeadIncre
+        )
+
+        # Verify registration succeeded
+        if 'EfficientDetIncre' in MODELS.module_dict:
+            logger.info(f"✓ EfficientDetIncre registered successfully in MODELS registry")
+            return True
+        else:
+            logger.error(f"✗ EfficientDetIncre import succeeded but not found in registry")
+            logger.error(f"Available custom models: {[k for k in MODELS.module_dict.keys() if 'Efficient' in k]}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to register custom modules: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
+
+
+class ModelTypeDetector:
+    """Detect model type from .pt file or metadata."""
+
+    @staticmethod
+    def detect_from_filename(filename: str) -> str:
+        """
+        Detect model type from filename.
+
+        Returns:
+            'yolo', 'rtdetr', 'faster_rcnn', 'efficientdet', or 'unknown'
+        """
+        filename_lower = filename.lower()
+
+        if any(x in filename_lower for x in ['yolo', 'yolov', 'yolo11', 'yolo10', 'yolo8']):
+            return 'yolo'
+        elif 'rtdetr' in filename_lower or 'rt-detr' in filename_lower:
+            return 'rtdetr'
+        elif 'faster' in filename_lower and 'rcnn' in filename_lower:
+            return 'faster_rcnn'
+        elif 'efficient' in filename_lower and 'det' in filename_lower:
+            return 'efficientdet'
+
+        return 'unknown'
+
+    @staticmethod
+    def detect_from_state_dict(model_path: str) -> str:
+        """
+        Detect model type by inspecting state dict keys.
+
+        Returns:
+            Model type string
+        """
+        try:
+            # Load with weights_only=False to support ultralytics models
+            state_dict = torch.load(model_path, map_location='cpu', weights_only=False)
+
+            # Get model keys
+            if isinstance(state_dict, dict):
+                if 'model' in state_dict:
+                    keys = state_dict['model'].state_dict().keys() if hasattr(state_dict['model'], 'state_dict') else []
+
+                    # Also check the model class name for RT-DETR
+                    if hasattr(state_dict['model'], 'model'):
+                        model_layers = state_dict['model'].model
+                        if hasattr(model_layers, '__getitem__') and len(model_layers) > 0:
+                            # Check the last layer (detection head)
+                            last_layer = model_layers[-1]
+                            if hasattr(last_layer, '__class__'):
+                                class_name = last_layer.__class__.__name__
+                                if 'RTDETR' in class_name or 'RTDETRDecoder' in class_name:
+                                    logger.info(f"Detected RT-DETR from model head class: {class_name}")
+                                    return 'rtdetr'
+                else:
+                    keys = list(state_dict.keys())
+            else:
+                keys = []
+
+            keys_str = ' '.join(str(k) for k in keys)
+
+            # RT-DETR detection - check FIRST as it's more specific
+            # RT-DETR uses transformer encoder/decoder architecture
+            rtdetr_markers = [
+                'enc_output', 'enc_score', 'dec_bbox', 'decoder.bbox_embed',
+                'decoder.layers', 'encoder.layers', 'denoising'
+            ]
+            if any(x in keys_str for x in rtdetr_markers):
+                logger.info("Detected RT-DETR from state dict keys (specific markers)")
+                return 'rtdetr'
+
+            # Fallback: check for generic transformer patterns
+            if any(x in keys_str for x in ['transformer', 'encoder', 'decoder']):
+                logger.info("Detected RT-DETR from state dict keys (transformer patterns)")
+                return 'rtdetr'
+
+            # YOLO detection - check for YOLO-specific patterns
+            # Use more specific patterns to avoid false positives
+            yolo_markers = ['C2f', 'SPPF']  # These are YOLO-specific modules
+            if any(x in keys_str for x in yolo_markers):
+                logger.info("Detected YOLO from state dict keys (C2f/SPPF)")
+                return 'yolo'
+
+            # Fallback: check for Detect head (but not RTDETRDecoder)
+            if 'Detect' in keys_str and 'RTDETRDecoder' not in keys_str and 'decoder' not in keys_str.lower():
+                logger.info("Detected YOLO from state dict keys (Detect head)")
+                return 'yolo'
+
+            # Faster R-CNN detection
+            if any(x in keys_str for x in ['rpn', 'roi_heads', 'backbone']):
+                return 'faster_rcnn'
+
+        except Exception as e:
+            logger.warning(f"Failed to detect model type from state dict: {e}")
+
+        return 'unknown'
+
+
+class ModelFactory:
+    """Factory for creating estimators from .pt files."""
+
+    def __init__(self):
+        self.detector = ModelTypeDetector()
+
+    def load_model(
+        self,
+        model_path: str,
+        model_type: Optional[str] = None,
+        class_names: Optional[List[str]] = None,
+        input_size: Optional[List[int]] = None,
+        device_type: str = "auto",
+        clip_values: tuple = (0, 255),
+    ):
+        """
+        Load model from .pt file and wrap with appropriate estimator.
+
+        Args:
+            model_path: Path to .pt file
+            model_type: Model type ('yolo', 'rtdetr', 'faster_rcnn', 'efficientdet')
+                       If None, auto-detect from filename
+            class_names: List of class names (optional)
+            input_size: [height, width] (optional, default [640, 640])
+            device_type: 'gpu', 'cpu', or 'auto'
+            clip_values: Image value range (default (0, 255))
+
+        Returns:
+            Configured estimator instance
+        """
+        model_path_obj = Path(model_path)
+
+        # Auto-detect model type if not provided
+        if model_type is None:
+            model_type = self.detector.detect_from_filename(model_path_obj.name)
+            if model_type == 'unknown':
+                model_type = self.detector.detect_from_state_dict(model_path)
+            logger.info(f"Auto-detected model type: {model_type}")
+
+        # Set defaults
+        input_size = input_size or [640, 640]
+        class_names = class_names or ["object"]  # Default single class
+
+        # Build config
+        config = {
+            "class_names": class_names,
+            "input_size": input_size,
+        }
+
+        # Load based on model type
+        if model_type == 'yolo':
+            return self._load_yolo(model_path, config, device_type, clip_values)
+        elif model_type == 'rtdetr':
+            return self._load_rtdetr(model_path, config, device_type, clip_values)
+        elif model_type == 'faster_rcnn':
+            return self._load_faster_rcnn(model_path, config, device_type, clip_values)
+        elif model_type == 'efficientdet':
+            return self._load_efficientdet(model_path, config, device_type, clip_values)
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+
+    def _load_yolo(self, model_path: str, config: dict, device_type: str, clip_values: tuple):
+        """Load YOLO model using ultralytics."""
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            raise ImportError("ultralytics is required for YOLO models. Install with: pip install ultralytics")
+
+        # Load ultralytics model
+        yolo_model = YOLO(model_path)
+
+        # Determine model name from path
+        filename = Path(model_path).stem.lower()
+        if 'yolo11' in filename or 'yolov11' in filename:
+            model_name = 'yolov11'
+        elif 'yolo10' in filename or 'yolov10' in filename:
+            model_name = 'yolov10'
+        elif 'yolo9' in filename or 'yolov9' in filename:
+            model_name = 'yolov9'
+        elif 'yolo8' in filename or 'yolov8' in filename:
+            model_name = 'yolov8'
+        else:
+            model_name = 'yolov8'  # Default
+
+        logger.info(f"Loading YOLO model: {model_name}")
+
+        # Create estimator
+        # channels_first=True (default) because ART expects NCHW input format
+        # is_ultralytics=True will automatically wrap the model with PyTorchYoloLossWrapper
+        # NOTE: Do NOT use preprocessing parameter - YOLO expects [0, 255] range
+        # attack_losses must match what PyTorchYoloLossWrapper.forward() returns
+        estimator = PyTorchYolo(
+            model=yolo_model.model,
+            input_shape=(3, *config['input_size']),
+            channels_first=True,  # Input is NCHW (standard for PyTorch)
+            device_type=device_type,
+            clip_values=clip_values,
+            attack_losses=("loss_total",),  # PyTorchYoloLossWrapper returns loss_total
+            is_ultralytics=True,
+            model_name=model_name,
+        )
+
+        logger.info(f"YOLO model loaded successfully: {model_name}")
+        return estimator
+
+    def _load_rtdetr(self, model_path: str, config: dict, device_type: str, clip_values: tuple):
+        """Load RT-DETR model using ultralytics."""
+        try:
+            from ultralytics import RTDETR
+        except ImportError:
+            raise ImportError("ultralytics is required for RT-DETR models. Install with: pip install ultralytics")
+
+        # Load RT-DETR model
+        rtdetr_model = RTDETR(model_path)
+
+        logger.info("Loading RT-DETR model")
+
+        # Create estimator
+        estimator = PyTorchRTDETR(
+            model=rtdetr_model.model,
+            input_shape=(3, *config['input_size']),
+            device_type=device_type,
+            clip_values=clip_values,
+        )
+
+        logger.info("RT-DETR model loaded successfully")
+        return estimator
+
+    def _load_faster_rcnn(self, model_path: str, config: dict, device_type: str, clip_values: tuple):
+        """Load Faster R-CNN model."""
+        # Load state dict
+        state_dict = torch.load(model_path, map_location='cpu')
+
+        # Create model architecture (this needs to be implemented based on your specific Faster R-CNN variant)
+        # For now, we'll use torchvision's pre-trained model as base
+        import torchvision
+
+        model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
+            num_classes=len(config['class_names'])
+        )
+
+        # Load weights if compatible
+        if isinstance(state_dict, dict) and 'model' in state_dict:
+            model.load_state_dict(state_dict['model'])
+        elif isinstance(state_dict, dict):
+            model.load_state_dict(state_dict)
+
+        logger.info("Loading Faster R-CNN model")
+
+        # Create estimator
+        estimator = PyTorchFasterRCNN(
+            model=model,
+            input_shape=(3, *config['input_size']),
+            device_type=device_type,
+            clip_values=clip_values,
+        )
+
+        logger.info("Faster R-CNN model loaded successfully")
+        return estimator
+
+    def _load_efficientdet(self, model_path: str, config: dict, device_type: str, clip_values: tuple):
+        """Load EfficientDet model from MMDetection checkpoint."""
+        try:
+            # Import required modules
+            import torch
+            from mmengine.config import Config
+            from mmengine.runner import load_checkpoint
+
+            # Try to import mmdet - will fail gracefully if mmcv ops not available
+            try:
+                import mmdet
+                import mmcv
+                # Check if mmcv ops are available
+                try:
+                    from mmcv.ops import roi_align
+                    from mmdet.registry import MODELS
+                    mmdet_available = True
+                    logger.info("MMDetection with CUDA ops available")
+                except ImportError as e:
+                    logger.warning(f"MMDetection CUDA ops not available: {e}")
+                    # Try to use MMDet without ops
+                    try:
+                        from mmdet.registry import MODELS
+                        mmdet_available = True
+                        logger.info("Using MMDetection without CUDA ops (limited functionality)")
+                    except ImportError:
+                        mmdet_available = False
+            except ImportError as e:
+                logger.warning(f"MMDetection import failed: {e}")
+                mmdet_available = False
+
+            model_path_obj = Path(model_path)
+
+            # Look for config file
+            config_file = None
+            possible_config_names = [
+                'config.py',
+                f'{model_path_obj.stem}.py',
+                'efficientdet_config.py'
+            ]
+
+            for config_name in possible_config_names:
+                config_path = model_path_obj.parent / config_name
+                if config_path.exists():
+                    config_file = str(config_path)
+                    break
+
+            if config_file is None:
+                # Try to find any .py file in the directory
+                py_files = list(model_path_obj.parent.glob('*.py'))
+                if py_files:
+                    config_file = str(py_files[0])
+                    logger.warning(f"Using config file: {config_file}")
+
+            if config_file is None:
+                raise FileNotFoundError(
+                    f"No config file found in {model_path_obj.parent}. "
+                    "EfficientDet requires an MMDetection config file."
+                )
+
+            logger.info(f"Loading EfficientDet from checkpoint: {model_path}")
+            logger.info(f"Using config: {config_file}")
+
+            # Try to load config from checkpoint first (contains trained model config)
+            checkpoint_loaded = False
+            try:
+                checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+                if 'meta' in checkpoint and 'cfg' in checkpoint['meta']:
+                    cfg_str = checkpoint['meta']['cfg']
+                    # cfg is stored as string, need to parse it
+                    if isinstance(cfg_str, str):
+                        # Write to temp file and load
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                            f.write(cfg_str)
+                            temp_config_path = f.name
+                        try:
+                            cfg = Config.fromfile(temp_config_path)
+                            logger.info("Loaded config from checkpoint metadata")
+                            checkpoint_loaded = True
+                        finally:
+                            import os
+                            os.unlink(temp_config_path)
+                    else:
+                        cfg = cfg_str
+                        logger.info("Loaded config from checkpoint metadata")
+                        checkpoint_loaded = True
+                else:
+                    # Load config from file
+                    cfg = Config.fromfile(config_file)
+                    logger.info("Loaded config from config file")
+            except Exception as e:
+                logger.warning(f"Could not load checkpoint metadata: {e}")
+                cfg = Config.fromfile(config_file)
+
+            # Build model from config
+            if mmdet_available:
+                try:
+                    # Register all MMDet modules first
+                    from mmdet.utils import register_all_modules
+                    register_all_modules()
+
+                    # Register custom modules (EfficientDetIncre, etc.)
+                    custom_registered = _register_custom_mmdet_modules()
+                    logger.info(f"Custom modules registration: {custom_registered}")
+
+                    def build_model_safe(model_cfg):
+                        """Helper to build model with error handling."""
+                        # Check if model type is in registry
+                        model_type = model_cfg.get('type', '')
+                        logger.info(f"Model type from config: {model_type}")
+
+                        # Check if model type exists in registry
+                        if model_type not in MODELS.module_dict:
+                            # Log all available model types in registry
+                            available_models = list(MODELS.module_dict.keys())
+                            efficient_models = [k for k in available_models if 'Efficient' in k]
+                            logger.error(f"✗ Model type '{model_type}' NOT found in MMDetection registry")
+                            logger.error(f"Available EfficientDet models: {efficient_models}")
+                            
+                            # If custom module registration failed, provide clear error
+                            if not custom_registered:
+                                raise ImportError(
+                                    f"Model type '{model_type}' requires custom module registration, "
+                                    f"but registration failed. Check logs for details."
+                                )
+                            else:
+                                raise ValueError(
+                                    f"Model type '{model_type}' not found in registry even after "
+                                    f"successful custom module import. This indicates a registration issue."
+                                )
+
+                        logger.info(f"✓ Model type '{model_type}' found in registry")
+                        return MODELS.build(model_cfg)
+
+                    try:
+                        model = build_model_safe(cfg.model)
+                        logger.info("Model built successfully from MMDetection config")
+                    except Exception as build_error:
+                        # If build failed and we used checkpoint config, try falling back to local config file
+                        if checkpoint_loaded and config_file:
+                            logger.warning(f"Failed to build model from checkpoint config: {build_error}")
+                            logger.warning(f"Attempting to fallback to local config file: {config_file}")
+                            try:
+                                cfg = Config.fromfile(config_file)
+                                model = build_model_safe(cfg.model)
+                                logger.info("Model built successfully from local config file (fallback)")
+                            except Exception as fallback_error:
+                                logger.error(f"Fallback to local config file also failed: {fallback_error}")
+                                raise build_error # Raise the original error
+                        else:
+                            raise build_error
+
+                    # Load checkpoint weights
+                    # Note: Use weights_only=False for MMEngine checkpoints (PyTorch 2.6+)
+                    # Determine target device
+                    if device_type == 'gpu' and torch.cuda.is_available():
+                        target_device = 'cuda'
+                    else:
+                        target_device = 'cpu'
+
+                    checkpoint = torch.load(model_path, map_location=target_device, weights_only=False)
+                    if 'state_dict' in checkpoint:
+                        model.load_state_dict(checkpoint['state_dict'], strict=False)
+                    else:
+                        model.load_state_dict(checkpoint, strict=False)
+                    logger.info(f"Checkpoint weights loaded successfully to {target_device}")
+
+                    # Move model to target device
+                    model = model.to(target_device)
+                    model.eval()
+                    logger.info(f"Model moved to {target_device} and set to eval mode")
+
+                except (ImportError, ValueError) as e:
+                    # These are registration/import errors - re-raise with clear message
+                    logger.error(f"Fatal: Model registration or import failed: {e}")
+                    raise ImportError(
+                        f"Failed to load EfficientDet model '{model_type}': {str(e)}\n\n"
+                        "This is likely due to:\n"
+                        "  1. Custom model class not properly registered with MMDetection\n"
+                        "  2. Missing dependencies or import errors\n"
+                        "  3. Incompatible MMDetection version\n\n"
+                        "Check the logs above for detailed error information."
+                    ) from e
+                except Exception as e:
+                    # Other errors during model building
+                    logger.error(f"Error building model from config: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    raise RuntimeError(
+                        f"Failed to build EfficientDet model from config: {str(e)}\n\n"
+                        "The model config was loaded successfully, but building the model failed.\n"
+                        "Check the logs above for detailed error information."
+                    ) from e
+
+            # Extract model configuration
+            input_size = config.get('input_size', [768, 768])
+
+            # Create estimator
+            estimator = PyTorchEfficientDet(
+                model=model,
+                input_shape=(3, *input_size),
+                device_type=device_type,
+                clip_values=clip_values,
+                config_file=config_file,
+                model_wrapper=None,  # Will use model directly
+            )
+
+            logger.info("EfficientDet model loaded successfully")
+            return estimator
+
+        except ImportError as e:
+            logger.error(f"Required modules not installed: {e}")
+            raise ImportError(
+                "MMEngine is required for EfficientDet models. "
+                "Install with: pip install mmengine\n"
+                "For full functionality, also install: pip install mmdet mmcv"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load EfficientDet model: {e}")
+            import traceback
+            traceback.print_exc()
+            raise ValueError(f"EfficientDet model loading failed: {e}")
+
+
+# Global factory instance
+model_factory = ModelFactory()

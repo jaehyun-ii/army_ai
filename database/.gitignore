@@ -1,0 +1,21 @@
+# Environment variables
+.env
+
+# Database data (if running locally without Docker)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# PostgreSQL
+*.log
+*.pid
+
+# Backup files
+*.sql.bak
+backup/
+dumps/
+
+# pgAdmin
+pgadmin/
+servers.json
