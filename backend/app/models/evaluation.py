@@ -40,7 +40,10 @@ class EvalDatasetType(str, enum.Enum):
 
 class EvalRun(Base):
     """
-    Evaluation run header.
+    Evaluation run header (execution history).
+
+    Stores high-level information about an evaluation execution.
+    Detailed dataset results are stored in EvalDatasetResult table.
 
     - pre_attack: Baseline evaluation on clean dataset (requires base_dataset_id)
     - post_attack: Adversarial evaluation on attacked dataset (requires attack_dataset_id)
@@ -65,8 +68,10 @@ class EvalRun(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # Evaluation configuration and results
+    # NOTE: metrics_summary and iou_distribution are DEPRECATED - use eval_dataset_results instead
     params = Column(JSONB)  # score threshold, NMS, IoU, etc.
-    metrics_summary = Column(JSONB)  # mAP, mAR, F1, etc.
+    metrics_summary = Column(JSONB)  # DEPRECATED: Use eval_dataset_results.metrics_summary
+    iou_distribution = Column(JSONB)  # DEPRECATED: Use eval_dataset_results.iou_distribution
 
     # Execution tracking
     started_at = Column(DateTime(timezone=True), nullable=True)
@@ -79,7 +84,9 @@ class EvalRun(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    items = relationship("EvalItem", back_populates="run", cascade="all, delete-orphan")
+    dataset_results = relationship("EvalDatasetResult", back_populates="run", cascade="all, delete-orphan")  # NEW
+    items = relationship("EvalItem", back_populates="run", cascade="all, delete-orphan")  # DEPRECATED: Use via dataset_results
+    class_metrics = relationship("EvalClassMetrics", back_populates="run", cascade="all, delete-orphan")  # DEPRECATED: Use via dataset_results
     experiment = relationship("Experiment", back_populates="eval_runs")
 
     # Check constraints (defined in SQL schema, documented here)
@@ -114,6 +121,59 @@ class EvalRun(Base):
         return f"<EvalRun(id={self.id}, name={self.name}, phase={self.phase}, status={self.status})>"
 
 
+class EvalDatasetResult(Base):
+    """
+    Detailed evaluation results for a specific dataset within an evaluation run.
+
+    This table separates execution history (EvalRun) from detailed dataset results,
+    enabling:
+    - Multiple datasets evaluation in single run (base + attack)
+    - Clear separation of base vs attack results
+    - Consistent query patterns for analysis
+    - Easier comparison across models/datasets
+
+    Each EvalRun can have multiple EvalDatasetResults (e.g., one for BASE, one for ATTACK).
+    """
+    __tablename__ = "eval_dataset_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    eval_run_id = Column(UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False)
+
+    # Dataset identification
+    dataset_type = Column(SQLEnum(EvalDatasetType, name="eval_dataset_type_enum", values_callable=lambda x: [e.value for e in x]), nullable=False)
+    dataset_id = Column(UUID(as_uuid=True), nullable=False)  # Unified dataset ID (2D or 3D)
+    dataset_dimension = Column(SQLEnum(DatasetDimension, name="eval_dataset_dimension_enum", values_callable=lambda x: [e.value for e in x]), nullable=False)
+
+    # Metrics for this specific dataset
+    metrics_summary = Column(JSONB)  # Overall metrics (map, map50, precision, recall, f1, etc.)
+    iou_distribution = Column(JSONB)  # IoU distribution statistics
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    run = relationship("EvalRun", back_populates="dataset_results")
+    items = relationship("EvalItem", back_populates="dataset_result", cascade="all, delete-orphan")
+    class_metrics = relationship("EvalClassMetrics", back_populates="dataset_result", cascade="all, delete-orphan")
+
+    # Check constraints
+    __table_args__ = (
+        CheckConstraint(
+            "metrics_summary IS NULL OR jsonb_typeof(metrics_summary)='object'",
+            name="chk_eval_dataset_metrics"
+        ),
+        CheckConstraint(
+            "iou_distribution IS NULL OR jsonb_typeof(iou_distribution)='object'",
+            name="chk_eval_dataset_iou"
+        ),
+    )
+
+    def __repr__(self):
+        return f"<EvalDatasetResult(id={self.id}, run_id={self.eval_run_id}, type={self.dataset_type}, dataset_id={self.dataset_id})>"
+
+
 class EvalItem(Base):
     """
     Per-image evaluation results.
@@ -123,16 +183,19 @@ class EvalItem(Base):
 
     PHASE 2 UPDATE: Removed file_name and storage_key columns (duplicates of images_2d).
     Use image_2d relationship to access file metadata.
+
+    PHASE 3 UPDATE: Added eval_dataset_result_id for direct link to dataset results.
     """
     __tablename__ = "eval_items"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    run_id = Column(UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False)  # DEPRECATED: Use eval_dataset_result_id
+    eval_dataset_result_id = Column(UUID(as_uuid=True), ForeignKey("eval_dataset_results.id", ondelete="CASCADE"), nullable=True)  # NEW: Preferred FK
 
     # Image reference (2D or 3D)
     image_2d_id = Column(UUID(as_uuid=True), ForeignKey("images_2d.id", ondelete="SET NULL"), nullable=True)
     image_3d_id = Column(UUID(as_uuid=True), ForeignKey("images_3d.id", ondelete="SET NULL"), nullable=True)
-    dataset_type = Column(SQLEnum(EvalDatasetType, name="eval_dataset_type_enum", values_callable=lambda x: [e.value for e in x]), nullable=True)
+    dataset_type = Column(SQLEnum(EvalDatasetType, name="eval_dataset_type_enum", values_callable=lambda x: [e.value for e in x]), nullable=True)  # DEPRECATED: Use eval_dataset_result_id
 
     # Evaluation data
     ground_truth = Column(JSONB)  # GT bounding boxes/classes
@@ -146,7 +209,8 @@ class EvalItem(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    run = relationship("EvalRun", back_populates="items")
+    run = relationship("EvalRun", back_populates="items")  # DEPRECATED: Use dataset_result
+    dataset_result = relationship("EvalDatasetResult", back_populates="items")  # NEW: Preferred relationship
     image_2d = relationship("Image2D", foreign_keys=[image_2d_id])
     image_3d = relationship("Image3D", foreign_keys=[image_3d_id])
 
@@ -222,3 +286,54 @@ class EvalListItem(Base):
 
     def __repr__(self):
         return f"<EvalListItem(id={self.id}, list_id={self.list_id}, run_id={self.run_id})>"
+
+
+class EvalClassMetrics(Base):
+    """
+    Per-class detailed metrics for evaluation runs.
+
+    Stores comprehensive metrics for each class including:
+    - mAP, mAP@0.5, mAP@0.75, mAP@0.5:0.95
+    - Precision, Recall, F1 Score
+    - AR (Average Recall) at various detection limits
+    - Size-specific metrics (small, medium, large)
+    - IoU distribution per class
+
+    PHASE 3 UPDATE: Added eval_dataset_result_id for direct link to dataset results.
+    """
+    __tablename__ = "eval_class_metrics"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False)  # DEPRECATED: Use eval_dataset_result_id
+    eval_dataset_result_id = Column(UUID(as_uuid=True), ForeignKey("eval_dataset_results.id", ondelete="CASCADE"), nullable=True)  # NEW: Preferred FK
+    class_name = Column(String(200), nullable=False)
+    dataset_type = Column(SQLEnum(EvalDatasetType, name="eval_dataset_type_enum", values_callable=lambda x: [e.value for e in x]), nullable=True)  # DEPRECATED: Use eval_dataset_result_id
+
+    # Metrics data
+    metrics = Column(JSONB, nullable=False)  # All class metrics (map, map50, map75, precision, recall, f1, etc.)
+    iou_distribution = Column(JSONB)  # Per-class IoU distribution statistics
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    run = relationship("EvalRun", back_populates="class_metrics")  # DEPRECATED: Use dataset_result
+    dataset_result = relationship("EvalDatasetResult", back_populates="class_metrics")  # NEW: Preferred relationship
+
+    # Check constraints
+    __table_args__ = (
+        CheckConstraint("char_length(class_name) > 0", name="chk_eval_class_metrics_name"),
+        CheckConstraint(
+            "metrics IS NOT NULL AND jsonb_typeof(metrics)='object'",
+            name="chk_eval_class_metrics_metrics"
+        ),
+        CheckConstraint(
+            "iou_distribution IS NULL OR jsonb_typeof(iou_distribution)='object'",
+            name="chk_eval_class_metrics_iou"
+        ),
+    )
+
+    def __repr__(self):
+        return f"<EvalClassMetrics(id={self.id}, run_id={self.run_id}, class_name={self.class_name})>"

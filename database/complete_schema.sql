@@ -418,13 +418,25 @@ CREATE UNIQUE INDEX uq_patches_3d_name_active
 ON patches_3d (lower(name))
 WHERE deleted_at IS NULL;
 
+-- ============================================================================
+-- 3D ATTACK DATASETS
+-- ============================================================================
+-- Important: Unlike 2D attack datasets, 3D attack datasets do NOT have a base_dataset_id field.
+-- This is because 3D attacks are generated differently (e.g., CARLA simulations)
+-- and may not have a direct 1:1 mapping to a base dataset.
+--
+-- When evaluating 3D attack datasets:
+-- - If base_dataset_3d_id is provided in eval_runs: Compare original vs attack (with robustness)
+-- - If base_dataset_3d_id is NOT provided: Evaluate attack only (no comparison)
+-- ============================================================================
+
 CREATE TABLE attack_datasets_3d (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name varchar(200) NOT NULL,
   description text,
   attack_type attack_type_enum NOT NULL,
   target_model_id uuid REFERENCES od_models(id) ON DELETE RESTRICT,
-  output_dataset_id uuid REFERENCES datasets_3d(id) ON DELETE SET NULL,
+  output_dataset_id uuid REFERENCES datasets_3d(id) ON DELETE SET NULL,  -- Attack output dataset (contains attacked images + GT)
   target_class varchar(200),
   patch_id uuid REFERENCES patches_3d(id) ON DELETE RESTRICT,
   parameters jsonb,
@@ -437,6 +449,7 @@ CREATE TABLE attack_datasets_3d (
   CONSTRAINT chk_attack_datasets_3d_parameters CHECK (parameters IS NULL OR jsonb_typeof(parameters) = 'object')
   -- Note: patch_id constraint removed to allow CARLA attacks without pre-existing Patch3D records
   -- Patch information is stored as strings in the parameters JSONB field
+  -- Note: NO base_dataset_id field (unlike attack_datasets_2d)
 );
 
 CREATE UNIQUE INDEX uq_attack_datasets_3d_name_active
@@ -509,6 +522,7 @@ CREATE TABLE eval_runs (
   experiment_id uuid REFERENCES experiments(id) ON DELETE SET NULL,
   params jsonb,
   metrics_summary jsonb,
+  iou_distribution jsonb,
   started_at timestamptz,
   ended_at timestamptz,
   status eval_status_enum NOT NULL DEFAULT 'queued',
@@ -519,12 +533,18 @@ CREATE TABLE eval_runs (
   CONSTRAINT chk_eval_name CHECK (char_length(name) > 0),
   CONSTRAINT chk_eval_params CHECK (params IS NULL OR jsonb_typeof(params)='object'),
   CONSTRAINT chk_eval_metrics CHECK (metrics_summary IS NULL OR jsonb_typeof(metrics_summary)='object'),
+  CONSTRAINT chk_eval_iou_distribution CHECK (iou_distribution IS NULL OR jsonb_typeof(iou_distribution)='object'),
   CONSTRAINT chk_eval_phase_requirements CHECK (
+    -- pre_attack: Requires base dataset, no attack dataset
     (phase = 'pre_attack' AND (base_dataset_id IS NOT NULL OR base_dataset_3d_id IS NOT NULL)
       AND attack_dataset_id IS NULL AND attack_dataset_3d_id IS NULL) OR
-    (phase = 'post_attack' AND (base_dataset_id IS NOT NULL OR base_dataset_3d_id IS NOT NULL)
-      AND ((attack_dataset_id IS NOT NULL AND attack_dataset_3d_id IS NULL) OR
-           (attack_dataset_id IS NULL AND attack_dataset_3d_id IS NOT NULL)))
+    -- post_attack: Requires attack dataset, base dataset is OPTIONAL
+    -- Note for 2D: base_dataset_id is auto-populated from attack_dataset_2d.base_dataset_id
+    -- Note for 3D: base_dataset_3d_id must be manually selected (attack_datasets_3d has no base_dataset_id)
+    --   - If base_dataset_3d_id provided: Compare original vs attack (with robustness metrics)
+    --   - If base_dataset_3d_id NOT provided: Evaluate attack only (no comparison, no robustness)
+    (phase = 'post_attack' AND ((attack_dataset_id IS NOT NULL AND attack_dataset_3d_id IS NULL) OR
+                                 (attack_dataset_id IS NULL AND attack_dataset_3d_id IS NOT NULL)))
   ),
   CONSTRAINT chk_eval_time_range CHECK (ended_at IS NULL OR started_at IS NULL OR ended_at >= started_at)
 );
@@ -538,12 +558,66 @@ CREATE INDEX idx_eval_runs_base3d ON eval_runs(base_dataset_3d_id);
 CREATE INDEX idx_eval_runs_attack3d ON eval_runs(attack_dataset_3d_id);
 CREATE INDEX idx_eval_runs_created_at ON eval_runs(created_at);
 
+-- ============================================================================
+-- EVAL DATASET RESULTS (Phase 2: Separate history from detailed results)
+-- ============================================================================
+-- Stores detailed evaluation results for each dataset (base or attack) within
+-- an evaluation run. This table separates execution history (eval_runs) from
+-- detailed results, enabling:
+-- 1. Multiple datasets evaluation in single run
+-- 2. Clear separation of base vs attack results
+-- 3. Consistent query patterns for analysis
+-- ============================================================================
+
+CREATE TABLE eval_dataset_results (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  eval_run_id uuid NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+
+  -- Dataset identification
+  dataset_type eval_dataset_type_enum NOT NULL,  -- 'base' or 'attack'
+  dataset_id uuid NOT NULL,  -- Actual dataset ID (unified for 2d/3d)
+  dataset_dimension eval_dataset_dimension_enum NOT NULL,  -- '2d' or '3d'
+
+  -- Metrics for this specific dataset
+  metrics_summary jsonb,  -- Overall metrics for this dataset (map, map50, precision, recall, f1, etc.)
+  iou_distribution jsonb,  -- IoU distribution statistics for this dataset
+
+  -- Timestamps
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+
+  -- Constraints
+  CONSTRAINT chk_eval_dataset_metrics CHECK (metrics_summary IS NULL OR jsonb_typeof(metrics_summary) = 'object'),
+  CONSTRAINT chk_eval_dataset_iou CHECK (iou_distribution IS NULL OR jsonb_typeof(iou_distribution) = 'object')
+);
+
+-- Indexes for efficient queries
+CREATE INDEX idx_eval_dataset_results_run ON eval_dataset_results(eval_run_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_eval_dataset_results_dataset ON eval_dataset_results(dataset_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_eval_dataset_results_type ON eval_dataset_results(dataset_type) WHERE deleted_at IS NULL;
+CREATE INDEX idx_eval_dataset_results_run_type ON eval_dataset_results(eval_run_id, dataset_type) WHERE deleted_at IS NULL;
+CREATE INDEX idx_eval_dataset_results_dimension ON eval_dataset_results(dataset_dimension) WHERE deleted_at IS NULL;
+
+-- Unique constraint: one result per (run, dataset_type) combination
+CREATE UNIQUE INDEX uq_eval_dataset_results_run_type
+ON eval_dataset_results(eval_run_id, dataset_type)
+WHERE deleted_at IS NULL;
+
+COMMENT ON TABLE eval_dataset_results IS 'Stores detailed evaluation results for each dataset (base or attack) within an evaluation run. This table separates execution history (eval_runs) from detailed results.';
+COMMENT ON COLUMN eval_dataset_results.dataset_type IS 'Type of dataset: ''base'' for clean/original datasets, ''attack'' for adversarial datasets';
+COMMENT ON COLUMN eval_dataset_results.dataset_id IS 'Unified dataset ID (can reference datasets_2d or datasets_3d depending on dataset_dimension)';
+COMMENT ON COLUMN eval_dataset_results.dataset_dimension IS 'Dataset dimension: ''2d'' or ''3d''';
+COMMENT ON COLUMN eval_dataset_results.metrics_summary IS 'Overall metrics for this specific dataset (map, map50, map75, precision, recall, f1, etc.)';
+COMMENT ON COLUMN eval_dataset_results.iou_distribution IS 'IoU distribution statistics (histogram, mean, median, etc.) for this dataset';
+
 CREATE TABLE eval_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+  eval_dataset_result_id uuid REFERENCES eval_dataset_results(id) ON DELETE CASCADE,  -- New: Direct link to dataset result
   image_2d_id uuid REFERENCES images_2d(id) ON DELETE SET NULL,
   image_3d_id uuid REFERENCES images_3d(id) ON DELETE SET NULL,
-  dataset_type eval_dataset_type_enum,
+  dataset_type eval_dataset_type_enum,  -- Deprecated: kept for backward compatibility, use eval_dataset_result_id instead
   ground_truth jsonb,
   prediction jsonb,
   metrics jsonb,
@@ -560,11 +634,15 @@ CREATE TABLE eval_items (
   )
 );
 
+COMMENT ON COLUMN eval_items.eval_dataset_result_id IS 'Foreign key to eval_dataset_results. Preferred over run_id for granular relationship to specific dataset results.';
+COMMENT ON COLUMN eval_items.dataset_type IS 'DEPRECATED: Use eval_dataset_result_id to link to eval_dataset_results which contains dataset_type. Kept for backward compatibility.';
+
 CREATE INDEX idx_eval_items_run ON eval_items(run_id);
+CREATE INDEX idx_eval_items_dataset_result ON eval_items(eval_dataset_result_id) WHERE deleted_at IS NULL;  -- New index
 CREATE INDEX idx_eval_items_image ON eval_items(image_2d_id);
 CREATE INDEX idx_eval_items_image3d ON eval_items(image_3d_id);
-CREATE INDEX idx_eval_items_dataset_type ON eval_items(dataset_type);
-CREATE INDEX idx_eval_items_run_type ON eval_items(run_id, dataset_type);
+CREATE INDEX idx_eval_items_dataset_type ON eval_items(dataset_type);  -- Deprecated, kept for backward compatibility
+CREATE INDEX idx_eval_items_run_type ON eval_items(run_id, dataset_type);  -- Deprecated, kept for backward compatibility
 
 CREATE TABLE eval_lists (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -589,6 +667,38 @@ CREATE TABLE eval_list_items (
 CREATE UNIQUE INDEX uq_eval_list_items_list_run
 ON eval_list_items (list_id, run_id)
 WHERE deleted_at IS NULL;
+
+CREATE TABLE eval_class_metrics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+  eval_dataset_result_id uuid REFERENCES eval_dataset_results(id) ON DELETE CASCADE,  -- New: Direct link to dataset result
+  class_name varchar(200) NOT NULL,
+  dataset_type eval_dataset_type_enum,  -- Deprecated: kept for backward compatibility, use eval_dataset_result_id instead
+  metrics jsonb NOT NULL,
+  iou_distribution jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  CONSTRAINT chk_eval_class_metrics_name CHECK (char_length(class_name) > 0),
+  CONSTRAINT chk_eval_class_metrics_metrics CHECK (metrics IS NOT NULL AND jsonb_typeof(metrics)='object'),
+  CONSTRAINT chk_eval_class_metrics_iou CHECK (iou_distribution IS NULL OR jsonb_typeof(iou_distribution)='object')
+);
+
+COMMENT ON COLUMN eval_class_metrics.eval_dataset_result_id IS 'Foreign key to eval_dataset_results. Preferred over run_id for granular relationship to specific dataset results.';
+COMMENT ON COLUMN eval_class_metrics.dataset_type IS 'DEPRECATED: Use eval_dataset_result_id to link to eval_dataset_results which contains dataset_type. Kept for backward compatibility.';
+
+CREATE INDEX idx_eval_class_metrics_run ON eval_class_metrics(run_id);
+CREATE INDEX idx_eval_class_metrics_dataset_result ON eval_class_metrics(eval_dataset_result_id) WHERE deleted_at IS NULL;  -- New index
+CREATE INDEX idx_eval_class_metrics_class ON eval_class_metrics(class_name);
+CREATE INDEX idx_eval_class_metrics_dataset_type ON eval_class_metrics(dataset_type);  -- Deprecated, kept for backward compatibility
+CREATE UNIQUE INDEX uq_eval_class_metrics_run_class_type
+ON eval_class_metrics (run_id, class_name, dataset_type)
+WHERE deleted_at IS NULL;  -- Deprecated, kept for backward compatibility
+
+-- New unique constraint for eval_dataset_result_id + class_name
+CREATE UNIQUE INDEX uq_eval_class_metrics_result_class
+ON eval_class_metrics (eval_dataset_result_id, class_name)
+WHERE deleted_at IS NULL AND eval_dataset_result_id IS NOT NULL;
 
 CREATE TABLE rt_capture_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -807,8 +917,16 @@ CREATE TRIGGER eval_runs_set_updated_at_trg
 BEFORE UPDATE ON eval_runs
 FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
 
+CREATE TRIGGER eval_dataset_results_set_updated_at_trg
+BEFORE UPDATE ON eval_dataset_results
+FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
 CREATE TRIGGER eval_items_set_updated_at_trg
 BEFORE UPDATE ON eval_items
+FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+CREATE TRIGGER eval_class_metrics_set_updated_at_trg
+BEFORE UPDATE ON eval_class_metrics
 FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
 
 CREATE TRIGGER od_models_set_updated_at_trg

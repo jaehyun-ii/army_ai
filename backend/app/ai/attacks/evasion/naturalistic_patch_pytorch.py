@@ -143,7 +143,10 @@ class NaturalisticPatchPyTorch(EvasionAttack):
 
         # Initialize latent vectors
         self.dim_z = self.generator.dim_z
+        # Fixed latent: base point in latent space
+        # We use randn (Normal distribution) to match BigGAN expected input distribution
         self.fixed_latent = torch.randn(self.dim_z).to(self.estimator.device)
+        logger.info(f"Initialized fixed_latent with Normal(0, 1) distribution")
         self.latent_shift = nn.Parameter(
             torch.randn(self.dim_z).to(self.estimator.device),
             requires_grad=True
@@ -268,21 +271,27 @@ class NaturalisticPatchPyTorch(EvasionAttack):
         batch_size, _C, H, W = images.shape
         patched_images = images.clone()
 
+        # Scale patch to match image range if needed
+        # Patch is [0, 1], but images might be [0, 255]
+        patch_to_apply = patch
+        if hasattr(self.estimator, 'clip_values') and self.estimator.clip_values[1] > 1.0:
+            patch_to_apply = patch * self.estimator.clip_values[1]
+
         # For simplicity, apply patch to center of image
         # TODO: Implement bbox-based placement using labels
-        patch_h, patch_w = patch.shape[1:]
+        patch_h, patch_w = patch_to_apply.shape[1:]
 
         # Resize patch to scale relative to image
         target_size = int(min(H, W) * self.patch_scale)
         if target_size != patch_h or target_size != patch_w:
             patch_resized = torch.nn.functional.interpolate(
-                patch.unsqueeze(0),
+                patch_to_apply.unsqueeze(0),
                 size=(target_size, target_size),
                 mode='bilinear',
                 align_corners=False
             )[0]
         else:
-            patch_resized = patch
+            patch_resized = patch_to_apply
 
         # Apply to center of each image
         y_start = (H - target_size) // 2

@@ -29,6 +29,7 @@ from app.services.metrics_calculator import (
 )
 from app.core.exceptions import NotFoundError, ValidationError
 from app.ai.estimators.object_detection.class_mapper import COCO_CLASSES
+from app.ai.evaluates import Evaluator
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class EvaluationService:
     def __init__(self):
         self.inference_service = InferenceService()
         self.sse_manager = SSEManager()
+        self.evaluator = Evaluator(iou_threshold=0.5)
 
     def _get_class_names_from_dataset(self, dataset: Any) -> Optional[List[str]]:
         """
@@ -308,7 +310,8 @@ class EvaluationService:
         if dimension == "3d":
             from sqlalchemy import select
             from app.models.dataset_3d import Dataset3D, Image3D, AttackDataset3D
-            # Attack dataset (3D) does not carry base link; use eval_run.base_dataset_3d_id provided by UI
+            # Note: 3D attack datasets do NOT have base_dataset_id field
+            # User must manually select base_dataset_3d_id in UI if comparison is needed
             attack_dataset_row = await db.execute(
                 select(AttackDataset3D).where(AttackDataset3D.id == eval_run.attack_dataset_3d_id, AttackDataset3D.deleted_at.is_(None))
             )
@@ -316,17 +319,18 @@ class EvaluationService:
             if not attack_dataset:
                 raise NotFoundError(resource=f"Attack dataset {eval_run.attack_dataset_3d_id}")
 
-            original_dataset_id = eval_run.base_dataset_3d_id
+            # For 3D: base_dataset_3d_id is OPTIONAL
+            # - If provided: Compare original vs attack (with robustness metrics)
+            # - If not provided: Evaluate attack dataset only (no comparison)
+            original_dataset_id = eval_run.base_dataset_3d_id  # May be None
             attack_output_dataset_id = attack_dataset.output_dataset_id
-            if not original_dataset_id:
-                raise ValidationError(detail="3D 평가에는 base_dataset_3d_id가 필요합니다 (UI에서 원본 데이터셋을 선택해주세요).")
         else:
             # Get attack dataset info (2D)
             attack_dataset = await crud.attack_dataset_2d.get(db, id=eval_run.attack_dataset_id)
             if not attack_dataset:
                 raise NotFoundError(resource=f"Attack dataset {eval_run.attack_dataset_id}")
 
-            # Get original dataset ID and attack output dataset ID
+            # For 2D: base_dataset_id is auto-populated from attack_dataset
             original_dataset_id = attack_dataset.base_dataset_id
             attack_output_dataset_id = attack_dataset.output_dataset_id
 
@@ -336,59 +340,67 @@ class EvaluationService:
                 "Please ensure attack dataset creation populates output_dataset_id."
             )
 
-        await eval_logger.info(f"원본 데이터셋 ID: {original_dataset_id}")
+        if original_dataset_id:
+            await eval_logger.info(f"원본 데이터셋 ID: {original_dataset_id}")
         await eval_logger.info(f"공격 데이터셋 ID: {attack_output_dataset_id}")
 
-        # ========== Step 1: Evaluate Original Dataset ==========
-        await eval_logger.info("Step 1/3: 원본 데이터셋 평가")
+        # ========== Step 1: Evaluate Original Dataset (if provided) ==========
+        original_dataset = None
+        original_images = None
+        original_metrics = None
 
-        if dimension == "3d":
-            dataset_row = await db.execute(
-                select(Dataset3D).where(Dataset3D.id == original_dataset_id, Dataset3D.deleted_at.is_(None))
+        if original_dataset_id:
+            await eval_logger.info("Step 1/3: 원본 데이터셋 평가")
+
+            if dimension == "3d":
+                dataset_row = await db.execute(
+                    select(Dataset3D).where(Dataset3D.id == original_dataset_id, Dataset3D.deleted_at.is_(None))
+                )
+                original_dataset = dataset_row.scalar_one_or_none()
+                if not original_dataset:
+                    raise NotFoundError(resource=f"Original dataset {original_dataset_id}")
+                images_row = await db.execute(
+                    select(Image3D).where(Image3D.dataset_id == original_dataset_id, Image3D.deleted_at.is_(None))
+                )
+                original_images = list(images_row.scalars().all())
+            else:
+                original_dataset = await crud.dataset_2d.get(db, id=original_dataset_id)
+                if not original_dataset:
+                    raise NotFoundError(resource=f"Original dataset {original_dataset_id}")
+                original_images = await crud.image_2d.get_by_dataset(db, dataset_id=original_dataset_id)
+            await eval_logger.info(f"원본 데이터셋: {len(original_images)}개 이미지")
+
+            # Run inference on original
+            original_inference_results = await self.inference_service.run_inference(
+                db=db,
+                model_id=eval_run.model_id,
+                image_ids=[img.id for img in original_images],
+                conf_threshold=conf_threshold,
+                iou_threshold=iou_threshold,
+                target_class=target_class,
+                dimension=dimension,
             )
-            original_dataset = dataset_row.scalar_one_or_none()
-            if not original_dataset:
-                raise NotFoundError(resource=f"Original dataset {original_dataset_id}")
-            images_row = await db.execute(
-                select(Image3D).where(Image3D.dataset_id == original_dataset_id, Image3D.deleted_at.is_(None))
+
+            await eval_logger.info(f"원본 데이터셋 추론 완료: {len(original_inference_results)}개")
+
+            # Calculate metrics for original
+            original_metrics = await self._calculate_metrics_with_gt(
+                db=db,
+                inference_results=original_inference_results,
+                images=original_images,
+                dataset=original_dataset,
+                target_class=target_class,
+                iou_threshold=iou_threshold,
+                dimension=dimension,
             )
-            original_images = list(images_row.scalars().all())
+
+            # Log metrics based on whether target class is set
+            if target_class and 'ap50' in original_metrics['overall']:
+                await eval_logger.info(f"원본 타겟 클래스 '{target_class}' AP@50: {original_metrics['overall']['ap50']:.3f}")
+            elif 'map50' in original_metrics['overall']:
+                await eval_logger.info(f"원본 mAP@50: {original_metrics['overall']['map50']:.3f}")
         else:
-            original_dataset = await crud.dataset_2d.get(db, id=original_dataset_id)
-            if not original_dataset:
-                raise NotFoundError(resource=f"Original dataset {original_dataset_id}")
-            original_images = await crud.image_2d.get_by_dataset(db, dataset_id=original_dataset_id)
-        await eval_logger.info(f"원본 데이터셋: {len(original_images)}개 이미지")
-
-        # Run inference on original
-        original_inference_results = await self.inference_service.run_inference(
-            db=db,
-            model_id=eval_run.model_id,
-            image_ids=[img.id for img in original_images],
-            conf_threshold=conf_threshold,
-            iou_threshold=iou_threshold,
-            target_class=target_class,
-            dimension=dimension,
-        )
-
-        await eval_logger.info(f"원본 데이터셋 추론 완료: {len(original_inference_results)}개")
-
-        # Calculate metrics for original
-        original_metrics = await self._calculate_metrics_with_gt(
-            db=db,
-            inference_results=original_inference_results,
-            images=original_images,
-            dataset=original_dataset,
-            target_class=target_class,
-            iou_threshold=iou_threshold,
-            dimension=dimension,
-        )
-
-        # Log metrics based on whether target class is set
-        if target_class and 'ap50' in original_metrics['overall']:
-            await eval_logger.info(f"원본 타겟 클래스 '{target_class}' AP@50: {original_metrics['overall']['ap50']:.3f}")
-        elif 'map50' in original_metrics['overall']:
-            await eval_logger.info(f"원본 mAP@50: {original_metrics['overall']['map50']:.3f}")
+            await eval_logger.info("Step 1/3: 원본 데이터셋 평가 생략 (base_dataset_id 미제공)")
 
         # ========== Step 2: Evaluate Attack Dataset ==========
         await eval_logger.info("Step 2/3: 공격 데이터셋 평가")
@@ -424,30 +436,49 @@ class EvaluationService:
 
         await eval_logger.info(f"공격 데이터셋 추론 완료: {len(attack_inference_results)}개")
 
-        # Calculate metrics for attack (using ORIGINAL GT)
-        # Map attack images to original images by filename
-        await eval_logger.info("공격 이미지와 원본 이미지 매핑 중...")
-
-        attack_metrics = await self._calculate_metrics_with_gt(
-            db=db,
-            inference_results=attack_inference_results,
-            images=original_images,  # Use original images for GT
-            dataset=original_dataset,  # Use original dataset for class names
-            use_filename_mapping=True,  # Map by filename instead of image_id
-            target_class=target_class,
-            iou_threshold=iou_threshold,
-            dimension=dimension,
-        )
-
-        # Check if metrics were calculated successfully (support both map50 and ap50)
-        has_metrics = (
-            attack_metrics.get('overall') and (
-                'map50' in attack_metrics['overall'] or 'ap50' in attack_metrics['overall']
+        # Calculate metrics for attack
+        # GT selection logic differs by dimension:
+        # - 2D: Always use original GT (filename mapping) - objects don't move, only perturbed
+        # - 3D: Always use attack dataset's own GT - CARLA generates new GT for each attack
+        if dimension == "3d":
+            # 3D: Attack dataset has its own GT generated by CARLA
+            await eval_logger.info("3D 공격 데이터셋 자체 GT 사용 (CARLA 생성)")
+            attack_metrics = await self._calculate_metrics_with_gt(
+                db=db,
+                inference_results=attack_inference_results,
+                images=attack_images,  # Use attack dataset's own images for GT
+                dataset=attack_dataset_obj,  # Use attack dataset for class names
+                use_filename_mapping=False,  # Direct image_id matching
+                target_class=target_class,
+                iou_threshold=iou_threshold,
+                dimension=dimension,
             )
-        )
-        if not has_metrics:
-            await eval_logger.error("공격 데이터셋 메트릭 계산 실패 - GT를 찾을 수 없습니다")
-            raise ValidationError(detail="공격 이미지와 원본 이미지 매핑 실패. 파일명 패턴을 확인하세요.")
+        else:
+            # 2D: Use original GT (object positions unchanged, only perturbed)
+            if original_images:
+                await eval_logger.info("2D 공격 이미지 평가 (원본 GT 사용, filename mapping)")
+                attack_metrics = await self._calculate_metrics_with_gt(
+                    db=db,
+                    inference_results=attack_inference_results,
+                    images=original_images,  # Use original images for GT
+                    dataset=original_dataset,  # Use original dataset for class names
+                    use_filename_mapping=True,  # Map by filename instead of image_id
+                    target_class=target_class,
+                    iou_threshold=iou_threshold,
+                    dimension=dimension,
+                )
+                # Check if mapping was successful
+                has_metrics = (
+                    attack_metrics.get('overall') and (
+                        'map50' in attack_metrics['overall'] or 'ap50' in attack_metrics['overall']
+                    )
+                )
+                if not has_metrics:
+                    await eval_logger.error("공격 데이터셋 메트릭 계산 실패 - GT 매핑 실패")
+                    raise ValidationError(detail="공격 이미지와 원본 이미지 매핑 실패. 파일명 패턴을 확인하세요.")
+            else:
+                # Should not happen for 2D (base_dataset_id is auto-populated)
+                raise ValidationError(detail="2D 공격 데이터셋 평가에는 base_dataset_id가 필요합니다.")
 
         # Log metrics based on whether target class is set
         if target_class and 'ap50' in attack_metrics['overall']:
@@ -455,58 +486,147 @@ class EvaluationService:
         elif 'map50' in attack_metrics['overall']:
             await eval_logger.info(f"공격 mAP@50: {attack_metrics['overall']['map50']:.3f}")
 
-        # ========== Step 3: Compare Results ==========
-        await eval_logger.info("Step 3/3: 결과 비교")
+        # ========== Step 3: Compare Results (if original provided) ==========
+        robustness_metrics = None
+        if original_metrics:
+            await eval_logger.info("Step 3/3: 결과 비교")
 
-        robustness_metrics = calculate_robustness_metrics(
-            original_metrics['overall'],
-            attack_metrics['overall']
-        )
+            robustness_metrics = calculate_robustness_metrics(
+                original_metrics['overall'],
+                attack_metrics['overall']
+            )
 
-        # Log metrics based on whether target class is set
-        metric_label = f"타겟 클래스 '{target_class}' AP" if target_class else "mAP"
-        await eval_logger.info(f"{metric_label} 하락: {robustness_metrics['delta_map']:.3f}")
-        await eval_logger.info(f"하락률: {robustness_metrics['drop_percentage']:.1f}%")
-        await eval_logger.info(f"Robustness ratio: {robustness_metrics['robustness_ratio']:.3f}")
+            # Log metrics based on whether target class is set
+            metric_label = f"타겟 클래스 '{target_class}' AP" if target_class else "mAP"
+            await eval_logger.info(f"{metric_label} 하락: {robustness_metrics['delta_map']:.3f}")
+            await eval_logger.info(f"하락률: {robustness_metrics['drop_percentage']:.1f}%")
+            await eval_logger.info(f"Robustness ratio: {robustness_metrics['robustness_ratio']:.3f}")
+        else:
+            await eval_logger.info("Step 3/3: 결과 비교 생략 (원본 데이터셋 미제공)")
 
-        # Save results with robustness metrics
-        combined_metrics = {
-            'overall': attack_metrics['overall'],
-            'per_class': attack_metrics['per_class'],
-            'robustness': robustness_metrics,
-            'original_metrics': original_metrics['overall'],
-        }
+        # Save results
+        # Case 1: Original dataset provided → Save BASE + ATTACK with robustness
+        # Case 2: No original dataset → Save ATTACK only (no robustness)
 
-        # NEW: Save BOTH base and attack evaluation results
-        # Step 1: Save base evaluation results
-        await self._save_evaluation_results(
-            db=db,
-            eval_run_id=eval_run.id,
-            inference_results=original_inference_results,
-            images=original_images,
-            metrics=original_metrics,
-            eval_logger=eval_logger,
-            dataset=original_dataset,
-            dataset_type=EvalDatasetType.BASE,  # Mark as base dataset
-            target_class=target_class,  # Pass target class for filtering
-            iou_threshold=iou_threshold,
-            dimension=dimension,
-        )
+        if original_metrics:
+            # Combined metrics with robustness (for eval_runs backward compatibility)
+            combined_metrics = {
+                'overall': attack_metrics['overall'],
+                'per_class': attack_metrics['per_class'],
+                'robustness': robustness_metrics,
+                'original_metrics': original_metrics['overall'],
+            }
 
-        # Step 2: Save attack evaluation results
-        await self._save_evaluation_results(
-            db=db,
-            eval_run_id=eval_run.id,
-            inference_results=attack_inference_results,
-            images=attack_images,
-            metrics=combined_metrics,
-            eval_logger=eval_logger,
-            dataset=original_dataset,  # Use original dataset for class names
-            dataset_type=EvalDatasetType.ATTACK,  # Mark as attack dataset
-            target_class=target_class,  # Pass target class for filtering
-            iou_threshold=iou_threshold,
-            dimension=dimension,
-        )
+            # Save base evaluation results
+            await self._save_evaluation_results(
+                db=db,
+                eval_run_id=eval_run.id,
+                inference_results=original_inference_results,
+                images=original_images,
+                metrics=original_metrics,
+                eval_logger=eval_logger,
+                dataset=original_dataset,
+                dataset_type=EvalDatasetType.BASE,
+                target_class=target_class,
+                iou_threshold=iou_threshold,
+                dimension=dimension,
+            )
+
+            # Save attack evaluation results with robustness
+            # NOTE: For 2D attacks, GT is in original_images (use filename mapping)
+            # For 3D attacks, GT is in attack_images (direct image_id matching)
+            gt_images = original_images if dimension == "2d" else attack_images
+            await self._save_evaluation_results(
+                db=db,
+                eval_run_id=eval_run.id,
+                inference_results=attack_inference_results,
+                images=gt_images,  # ✅ Use original_images for 2D (GT location), attack_images for 3D
+                metrics=combined_metrics,
+                eval_logger=eval_logger,
+                dataset=attack_dataset_obj,  # ✅ FIXED: Use attack dataset for dataset_id
+                dataset_type=EvalDatasetType.ATTACK,
+                target_class=target_class,
+                iou_threshold=iou_threshold,
+                dimension=dimension,
+                class_names_dataset=original_dataset,  # ✅ Use original dataset for class names
+            )
+        else:
+            # No original dataset - Save only attack results without robustness
+            await self._save_evaluation_results(
+                db=db,
+                eval_run_id=eval_run.id,
+                inference_results=attack_inference_results,
+                images=attack_images,
+                metrics=attack_metrics,  # No robustness metrics
+                eval_logger=eval_logger,
+                dataset=attack_dataset_obj,
+                dataset_type=EvalDatasetType.ATTACK,
+                target_class=target_class,
+                iou_threshold=iou_threshold,
+                dimension=dimension,
+            )
+
+    def _find_matching_image(
+        self,
+        attack_filename: str,
+        original_images: List[Any],
+        remove_suffix: bool = True,
+    ) -> Optional[Any]:
+        """
+        Find matching original image for an attack image by filename.
+
+        Args:
+            attack_filename: Filename of attack image
+            original_images: List of original images to search
+            remove_suffix: If True, try to remove attack-related prefixes/suffixes
+
+        Returns:
+            Matching original image or None if not found
+        """
+        # Create filename mapping
+        filename_to_image = {}
+        for img in original_images:
+            filename_to_image[img.file_name] = img
+
+        if not remove_suffix:
+            # Direct match only
+            return filename_to_image.get(attack_filename)
+
+        # Try multiple mapping strategies
+        base_filename = attack_filename
+
+        # Strategy 1: Remove attack prefixes
+        for prefix in ['adv_', 'patched_', 'noise_', 'attacked_', 'adversarial_', 'attack_']:
+            if base_filename.startswith(prefix):
+                base_filename = base_filename[len(prefix):]
+                break
+
+        # Strategy 2: Remove suffixes (before extension)
+        name_without_ext, ext = base_filename.rsplit('.', 1) if '.' in base_filename else (base_filename, '')
+        for suffix in ['_adv', '_attacked', '_adversarial', '_attack']:
+            if name_without_ext.endswith(suffix):
+                name_without_ext = name_without_ext[:-len(suffix)]
+                break
+        base_filename = f"{name_without_ext}.{ext}" if ext else name_without_ext
+
+        # Try exact match first
+        image = filename_to_image.get(base_filename)
+        if image:
+            return image
+
+        # Try original attack filename
+        image = filename_to_image.get(attack_filename)
+        if image:
+            return image
+
+        # Try fuzzy matching - find any filename containing the base name
+        base_name_no_ext = name_without_ext
+        for orig_filename, orig_img in filename_to_image.items():
+            orig_name_no_ext = orig_filename.rsplit('.', 1)[0] if '.' in orig_filename else orig_filename
+            if base_name_no_ext in orig_name_no_ext or orig_name_no_ext in base_name_no_ext:
+                return orig_img
+
+        return None
 
     async def _calculate_metrics_with_gt(
         self,
@@ -802,7 +922,7 @@ class EvaluationService:
             if use_filename_mapping:
                 logger.error("This is likely due to filename mapping failure between attack and original images")
                 logger.error("Please check that attack image filenames can be mapped to original filenames")
-            return {'overall': {}, 'per_class': {}}
+            return {'overall': {}, 'per_class': {}, 'iou_distribution': None}
 
         logger.info(f"Calculating metrics: {len(all_predictions)} predictions, {len(all_ground_truths)} GTs")
 
@@ -831,16 +951,30 @@ class EvaluationService:
             if non_target_gts:
                 logger.error(f"❌ FILTER FAILED: Found {len(non_target_gts)} GTs with non-target classes: {set(non_target_gts)}")
 
-        overall_metrics = calculate_overall_metrics(all_predictions, all_ground_truths, iou_threshold)
+        # ============================================================
+        # EVALUATION: Detailed metrics with per-class analysis
+        # ============================================================
+        logger.info("🚀 Using Evaluator for detailed metrics calculation")
 
-        # Skip per-class metrics calculation - not needed
-        # class_names = set([gt.class_name for gt in all_ground_truths])
-        # class_names.update([pred.class_name for pred in all_predictions])
-        # per_class_metrics = {}
-        # for class_name in class_names:
-        #     per_class_metrics[class_name] = calculate_class_metrics(
-        #         all_predictions, all_ground_truths, class_name
-        #     )
+        # Update evaluator IoU threshold
+        self.evaluator.iou_threshold = iou_threshold
+
+        # Perform comprehensive evaluation
+        eval_results = self.evaluator.evaluate(
+            predictions=all_predictions,
+            ground_truths=all_ground_truths,
+            target_class=target_class,
+            include_iou_distribution=True,
+        )
+
+        overall_metrics = eval_results['overall']
+        per_class_metrics = eval_results['per_class']
+        iou_distribution = eval_results['iou_distribution']
+
+        logger.info(f"✅ Evaluation complete: "
+                   f"mAP@0.5:0.95={overall_metrics.get('map', 0.0):.4f}, "
+                   f"mAP@0.5={overall_metrics.get('map50', 0.0):.4f}, "
+                   f"{len(per_class_metrics)} classes evaluated")
 
         # Rename metrics based on target class setting
         if target_class:
@@ -861,7 +995,8 @@ class EvaluationService:
                     'total_pred': overall_metrics.get('total_pred', 0),
                     'target_class': target_class,  # Explicitly mark target class
                 },
-                'per_class': {},
+                'per_class': per_class_metrics,
+                'iou_distribution': iou_distribution,
             }
             logger.info(f"🎯 Converted overall keys: {list(result['overall'].keys())}")
             logger.info(f"🎯 ap={result['overall']['ap']:.4f}, ap50={result['overall']['ap50']:.4f}")
@@ -871,7 +1006,8 @@ class EvaluationService:
             logger.info(f"📊 MULTI-CLASS MODE: Keeping 'map' naming (no target class)")
             return {
                 'overall': overall_metrics,
-                'per_class': {},  # Empty dict
+                'per_class': per_class_metrics,
+                'iou_distribution': iou_distribution,
             }
 
     async def _save_evaluation_results(
@@ -887,32 +1023,104 @@ class EvaluationService:
         target_class: Optional[str] = None,  # NEW: Target class for filtering
         iou_threshold: float = 0.5,  # IoU threshold for matching
         dimension: str = "2d",
+        class_names_dataset: Optional[Any] = None,  # NEW: For class name resolution (useful for attack datasets)
     ) -> None:
-        """Save evaluation results to database."""
+        """
+        Save evaluation results to database using new structure.
+
+        Creates eval_dataset_result first, then links eval_items and eval_class_metrics to it.
+
+        Args:
+            dataset: The dataset being evaluated (determines dataset_id in eval_dataset_results)
+            class_names_dataset: Optional dataset to use for class name resolution.
+                                 Useful when evaluating attack datasets (dataset=attack, class_names_dataset=original)
+        """
         await eval_logger.status("평가 결과 저장 중...")
 
-        # Get class names from dataset metadata
-        class_names = self._get_class_names_from_dataset(dataset) if dataset else None
+        # Get class names from class_names_dataset if provided, otherwise from dataset
+        class_names = self._get_class_names_from_dataset(
+            class_names_dataset or dataset
+        ) if (class_names_dataset or dataset) else None
 
         # Extract target_class from metrics if not provided
         if not target_class and 'overall' in metrics:
             target_class = metrics['overall'].get('target_class')
+
+        # ============================================================
+        # STEP 1: Create eval_dataset_result
+        # ============================================================
+        from app.schemas.evaluation import EvalDatasetResultCreate, DatasetDimension
+
+        # Determine dataset_id from dataset object
+        dataset_id = dataset.id if dataset else None
+        if not dataset_id:
+            raise ValueError("dataset_id is required for saving evaluation results")
+
+        # Determine dimension enum
+        dimension_enum = DatasetDimension.THREE_D if dimension == "3d" else DatasetDimension.TWO_D
+
+        # Extract metrics for this dataset (without robustness/original_metrics)
+        # Note: robustness and original_metrics are at the top level of metrics dict,
+        # not inside metrics['overall'], so we extract them separately
+        dataset_metrics_summary = metrics.get('overall', {})
+
+        dataset_iou_distribution = metrics.get('iou_distribution')
+
+        # Create eval_dataset_result
+        dataset_result_create = EvalDatasetResultCreate(
+            eval_run_id=eval_run_id,
+            dataset_type=dataset_type,
+            dataset_id=dataset_id,
+            dataset_dimension=dimension_enum,
+            metrics_summary=dataset_metrics_summary,
+            iou_distribution=dataset_iou_distribution,
+        )
+
+        dataset_result = await crud.evaluation.create_eval_dataset_result(db, dataset_result_create)
+        eval_dataset_result_id = dataset_result.id
+
+        logger.info(f"✅ Created eval_dataset_result: {eval_dataset_result_id} (type={dataset_type}, dataset_id={dataset_id})")
 
         # Save evaluation items
         for result in inference_results:
             image_id = UUID(result["image_id"])
 
             # Load GT for this image
+            # For 2D attack datasets: image_id is attack image, but GT is in original images
+            # Need to map by filename
             ground_truth = []
             image = None
             image_width = 640  # Default value
             image_height = 640  # Default value
+            gt_image_id = image_id  # Default: same as inference image_id
+
+            # For 2D attack datasets: Find original image by filename mapping
+            if dataset_type == EvalDatasetType.ATTACK and dimension == "2d":
+                # Find attack image by ID to get its filename
+                attack_image = await crud.image_2d.get(db, id=image_id)
+                if attack_image:
+                    attack_filename = attack_image.file_name
+                    # Map to original image by filename (strip attack suffix)
+                    original_image = self._find_matching_image(
+                        attack_filename, images, remove_suffix=True
+                    )
+                    if original_image:
+                        gt_image_id = original_image.id
+                        image = original_image
+                        logger.debug(f"Mapped attack image {attack_filename} -> original {original_image.file_name}")
+                    else:
+                        logger.warning(f"Could not find original image for attack file {attack_filename}")
+                else:
+                    logger.warning(f"Could not find attack image with ID {image_id}")
+            else:
+                # Direct mapping: image_id is the same for both inference and GT
+                image = next((img for img in images if img.id == image_id), None)
+
             try:
                 if dimension == "3d":
-                    annotations = await crud.annotation.get_by_image_3d(db, image_3d_id=image_id)
+                    annotations = await crud.annotation.get_by_image_3d(db, image_3d_id=gt_image_id)
                 else:
-                    annotations = await crud.annotation.get_by_image(db, image_2d_id=image_id)
-                image = next((img for img in images if img.id == image_id), None)
+                    annotations = await crud.annotation.get_by_image(db, image_2d_id=gt_image_id)
 
                 if image and annotations:
                     image_width = getattr(image, 'width', 640)
@@ -984,44 +1192,74 @@ class EvaluationService:
 
             eval_item = EvalItemCreate(
                 run_id=eval_run_id,
+                eval_dataset_result_id=eval_dataset_result_id,  # NEW: Link to dataset result
                 image_2d_id=image_id if dimension != "3d" else None,
                 image_3d_id=image_id if dimension == "3d" else None,
-                dataset_type=dataset_type,  # NEW: Set dataset_type
+                dataset_type=dataset_type,  # DEPRECATED: Kept for backward compatibility
                 ground_truth=ground_truth,
                 prediction=result.get("detections", []),
                 metrics=image_metrics,
             )
             await crud.evaluation.create_eval_item(db, eval_item)
 
-        # Skip class metrics - not needed
-        # await eval_logger.status(f"클래스별 메트릭 저장 중... ({len(metrics.get('per_class', {}))}개 클래스)")
-        # for class_name, class_metrics in metrics.get('per_class', {}).items():
-        #     class_metrics_create = EvalClassMetricsCreate(
-        #         run_id=eval_run_id,
-        #         class_name=class_name,
-        #         metrics=class_metrics,
-        #     )
-        #     await crud.evaluation.create_eval_class_metrics(db, class_metrics_create)
+        # Save per-class metrics
+        per_class_metrics = metrics.get('per_class', {})
+        per_class_iou_dist = metrics.get('per_class_iou_distribution', {})
 
-        # Update evaluation run with results
-        # For post_attack phase, save the full combined_metrics including original_metrics and robustness
-        # For other phases, just save overall metrics
+        if per_class_metrics:
+            await eval_logger.status(f"클래스별 메트릭 저장 중... ({len(per_class_metrics)}개 클래스)")
+            logger.info(f"Saving per-class metrics for {len(per_class_metrics)} classes")
+
+            from app.schemas.evaluation import EvalClassMetricsCreate
+
+            for class_name, class_metrics in per_class_metrics.items():
+                # Remove iou_distribution from class_metrics if it exists (it's stored separately)
+                class_metrics_copy = {k: v for k, v in class_metrics.items() if k != 'iou_distribution'}
+
+                class_metrics_create = EvalClassMetricsCreate(
+                    run_id=eval_run_id,
+                    eval_dataset_result_id=eval_dataset_result_id,  # NEW: Link to dataset result
+                    class_name=class_name,
+                    dataset_type=dataset_type,  # DEPRECATED: Kept for backward compatibility
+                    metrics=class_metrics_copy,
+                    iou_distribution=per_class_iou_dist.get(class_name)
+                )
+                await crud.evaluation.create_eval_class_metrics(db, class_metrics_create)
+
+            logger.info(f"✅ Saved {len(per_class_metrics)} per-class metrics records")
+
+        # ============================================================
+        # STEP 3: Update evaluation run (DEPRECATED fields for backward compatibility)
+        # ============================================================
+        # NOTE: metrics_summary and iou_distribution in eval_runs are DEPRECATED.
+        # The actual data is in eval_dataset_results.
+        # However, we still update eval_runs for backward compatibility and to store
+        # robustness information (which is a comparison between base and attack).
+
         if 'robustness' in metrics and 'original_metrics' in metrics:
-            # Post-attack: save combined metrics with robustness info
+            # Post-attack: save robustness and original_metrics for comparison
+            # The actual dataset-specific metrics are in eval_dataset_results
             metrics_to_save = {
-                **metrics['overall'],
                 'robustness': metrics['robustness'],
                 'original_metrics': metrics['original_metrics']
             }
         else:
-            # Pre-attack or other: just save overall metrics
+            # Pre-attack or single dataset: save overall metrics for backward compatibility
             metrics_to_save = metrics.get('overall', {})
+
+        # Extract overall IoU distribution (for backward compatibility)
+        overall_iou_dist = metrics.get('iou_distribution')
 
         await crud.evaluation.update_eval_run(
             db, eval_run_id,
-            EvalRunUpdate(metrics_summary=metrics_to_save)
+            EvalRunUpdate(
+                metrics_summary=metrics_to_save,
+                iou_distribution=overall_iou_dist
+            )
         )
+
         await db.commit()
+        logger.info(f"✅ Evaluation results saved successfully (run_id={eval_run_id}, dataset_result_id={eval_dataset_result_id})")
 
     def _calculate_image_metrics(
         self,

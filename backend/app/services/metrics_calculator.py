@@ -112,9 +112,12 @@ def calculate_ap_ar_at_iou(
         same_class_gt_count = 0
 
         for gt_idx, gt in enumerate(ground_truths):
-            if gt.class_name != pred.class_name:
-                class_mismatches += 1
+            # Must be the same class and same image
+            if gt.class_name != pred.class_name or gt.image_id != pred.image_id:
+                if gt.class_name != pred.class_name:
+                    class_mismatches += 1
                 continue
+            
             same_class_gt_count += 1
             if gt_matched[gt_idx]:
                 continue

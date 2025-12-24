@@ -34,6 +34,47 @@ class DatasetDimension(str, Enum):
     THREE_D = "3d"
 
 
+# ========== Evaluation Dataset Result Schemas ==========
+
+class EvalDatasetResultBase(BaseModel):
+    """Base schema for evaluation dataset result."""
+    eval_run_id: UUID
+    dataset_type: EvalDatasetType
+    dataset_id: UUID
+    dataset_dimension: DatasetDimension
+    metrics_summary: Optional[Dict[str, Any]] = Field(None, description="Overall metrics for this dataset")
+    iou_distribution: Optional[Dict[str, Any]] = Field(None, description="IoU distribution statistics")
+
+
+class EvalDatasetResultCreate(EvalDatasetResultBase):
+    """Schema for creating evaluation dataset result."""
+    pass
+
+
+class EvalDatasetResultUpdate(BaseModel):
+    """Schema for updating evaluation dataset result."""
+    metrics_summary: Optional[Dict[str, Any]] = None
+    iou_distribution: Optional[Dict[str, Any]] = None
+
+
+class EvalDatasetResultResponse(EvalDatasetResultBase):
+    """Schema for evaluation dataset result response."""
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EvalDatasetResultListResponse(BaseModel):
+    """Schema for paginated evaluation dataset result list."""
+    items: List[EvalDatasetResultResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 # ========== Evaluation Run Schemas ==========
 
 class EvalRunBase(BaseModel):
@@ -74,6 +115,7 @@ class EvalRunUpdate(BaseModel):
     description: Optional[str] = None
     status: Optional[EvalStatus] = None
     metrics_summary: Optional[Dict[str, Any]] = None
+    iou_distribution: Optional[Dict[str, Any]] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     params: Optional[Dict[str, Any]] = None
@@ -84,12 +126,14 @@ class EvalRunResponse(EvalRunBase):
     id: UUID
     status: EvalStatus
     metrics_summary: Optional[Dict[str, Any]] = None
+    iou_distribution: Optional[Dict[str, Any]] = Field(None, description="IoU distribution statistics")
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     created_by: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
+    dataset_results: Optional[List[EvalDatasetResultResponse]] = Field(default=None, description="Dataset-specific evaluation results (only populated in detail view)")
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
@@ -109,11 +153,13 @@ class EvalItemBase(BaseModel):
     Base schema for evaluation item (2D/3D).
 
     PHASE 2 UPDATE: file_name and storage_key removed (use image relationships).
+    PHASE 3 UPDATE: Added eval_dataset_result_id for direct link to dataset results.
     """
-    run_id: UUID
+    run_id: UUID  # DEPRECATED: Use eval_dataset_result_id
+    eval_dataset_result_id: Optional[UUID] = Field(None, description="Foreign key to eval_dataset_results (preferred)")
     image_2d_id: Optional[UUID] = None
     image_3d_id: Optional[UUID] = None
-    dataset_type: Optional[EvalDatasetType] = Field(None, description="Dataset type: 'base' or 'attack'")
+    dataset_type: Optional[EvalDatasetType] = Field(None, description="DEPRECATED: Dataset type, use eval_dataset_result_id instead")
     ground_truth: Optional[Union[Dict[str, Any], List[Any]]] = Field(None, description="GT bounding boxes/classes")
     prediction: Optional[Union[Dict[str, Any], List[Any]]] = Field(None, description="Model predictions")
     metrics: Optional[Dict[str, Any]] = Field(None, description="Per-item metrics")
@@ -331,3 +377,48 @@ class EvalRunComparisonResponseLegacy(BaseModel):
     pre_run: EvalRunResponse
     post_run: EvalRunResponse
     delta_metrics: Dict[str, Any] = Field(default_factory=dict, description="Computed metric deltas")
+
+
+# ========== Class Metrics Schemas ==========
+
+class EvalClassMetricsBase(BaseModel):
+    """
+    Base schema for per-class evaluation metrics.
+
+    PHASE 3 UPDATE: Added eval_dataset_result_id for direct link to dataset results.
+    """
+    run_id: UUID  # DEPRECATED: Use eval_dataset_result_id
+    eval_dataset_result_id: Optional[UUID] = Field(None, description="Foreign key to eval_dataset_results (preferred)")
+    class_name: str = Field(..., min_length=1, max_length=200)
+    dataset_type: Optional[EvalDatasetType] = Field(None, description="DEPRECATED: Dataset type, use eval_dataset_result_id instead")
+    metrics: Dict[str, Any] = Field(..., description="Per-class metrics (map, map50, map75, precision, recall, f1, etc.)")
+    iou_distribution: Optional[Dict[str, Any]] = Field(None, description="Per-class IoU distribution statistics")
+
+
+class EvalClassMetricsCreate(EvalClassMetricsBase):
+    """Schema for creating per-class metrics."""
+    pass
+
+
+class EvalClassMetricsUpdate(BaseModel):
+    """Schema for updating per-class metrics."""
+    metrics: Optional[Dict[str, Any]] = None
+    iou_distribution: Optional[Dict[str, Any]] = None
+
+
+class EvalClassMetricsResponse(EvalClassMetricsBase):
+    """Schema for per-class metrics response."""
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EvalClassMetricsListResponse(BaseModel):
+    """Schema for paginated per-class metrics list."""
+    items: List[EvalClassMetricsResponse]
+    total: int
+    page: int = 1
+    page_size: int = 50

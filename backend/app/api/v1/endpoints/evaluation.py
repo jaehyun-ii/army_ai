@@ -20,6 +20,7 @@ from app.schemas.evaluation import (
     EvalRunUpdate,
     EvalRunResponse,
     EvalRunListResponse,
+    EvalDatasetResultResponse,
     EvalItemCreate,
     EvalItemUpdate,
     EvalItemResponse,
@@ -63,7 +64,9 @@ async def create_evaluation_run(
     - **post_attack**: Requires attack_dataset_id (base_dataset_id auto-validated)
     """
     try:
-        # Auto-populate base_dataset_id from attack_dataset if needed
+        # Auto-populate base_dataset_id from attack_dataset if needed (2D ONLY)
+        # Note: 3D attack datasets do NOT have base_dataset_id field,
+        # so user must manually select base_dataset_3d_id in UI if comparison is needed
         if eval_run.attack_dataset_id and not eval_run.base_dataset_id:
             from app import crud
             # Get attack dataset and extract base_dataset_id
@@ -89,14 +92,72 @@ async def get_evaluation_run(
     run_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get evaluation run by ID."""
+    """Get evaluation run by ID with dataset results."""
     db_eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
     if not db_eval_run:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Evaluation run not found",
         )
-    return db_eval_run
+
+    # dataset_results are already loaded via selectinload in CRUD
+    # Use model_validate to properly serialize the SQLAlchemy model with relationships
+    return EvalRunResponse.model_validate(db_eval_run)
+
+
+@router.get("/runs/{run_id}/dataset-results", response_model=List[EvalDatasetResultResponse])
+async def get_eval_dataset_results_by_run(
+    run_id: UUID,
+    dataset_type: Optional[EvalDatasetType] = Query(None, description="Filter by dataset type (base or attack)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get all dataset results for an evaluation run.
+
+    Optionally filter by dataset_type (BASE or ATTACK).
+
+    Returns a list of dataset-specific evaluation results, each containing:
+    - dataset_type: BASE or ATTACK
+    - dataset_id: The actual dataset ID
+    - metrics_summary: Metrics for this specific dataset
+    - iou_distribution: IoU distribution for this dataset
+    """
+    results = await crud_evaluation.get_eval_dataset_results_by_run(
+        db=db,
+        eval_run_id=run_id,
+        dataset_type=dataset_type
+    )
+    if not results:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No dataset results found for evaluation run {run_id}"
+        )
+    return results
+
+
+@router.get("/runs/{run_id}/dataset-results/{dataset_type}", response_model=EvalDatasetResultResponse)
+async def get_eval_dataset_result_by_type(
+    run_id: UUID,
+    dataset_type: EvalDatasetType,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get specific dataset result by type (BASE or ATTACK).
+
+    This is useful for directly accessing the base or attack evaluation results
+    without fetching all results.
+    """
+    result = await crud_evaluation.get_eval_dataset_result_by_run_and_type(
+        db=db,
+        eval_run_id=run_id,
+        dataset_type=dataset_type
+    )
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {dataset_type.value} dataset result found for evaluation run {run_id}"
+        )
+    return result
 
 
 @router.get("/runs", response_model=EvalRunListResponse)
@@ -224,13 +285,13 @@ async def execute_evaluation_run(
     logger.info(f"[Execute Evaluation] Received parameters: conf_threshold={conf_threshold}, iou_threshold={iou_threshold}, target_class={target_class}")
 
     # Update status to queued and save params
-    await crud_evaluation.update_eval_run(
+    db_eval_run = await crud_evaluation.update_eval_run(
         db=db,
         eval_run_id=run_id,
         eval_run_update=EvalRunUpdate(status=EvalStatus.QUEUED, params=params),
     )
-    await db.commit()
-    await db.refresh(db_eval_run)
+    # await db.commit()  # Committing is handled by get_db dependency
+    # await db.refresh(db_eval_run)  # Refreshing is not needed as update_eval_run returns fresh object
 
     # Read target_class from params if not provided in query parameter
     # This ensures target_class is used even when executing via background task
@@ -959,8 +1020,8 @@ async def compare_robustness(
     overall_robustness = calculate_robustness_metrics(clean_metrics, adv_metrics)
 
     # Get per-class metrics for both runs
-    clean_class_metrics = await crud_evaluation.get_eval_class_metrics(db=db, run_id=clean_run_id)
-    adv_class_metrics = await crud_evaluation.get_eval_class_metrics(db=db, run_id=adv_run_id)
+    clean_class_metrics = await crud_evaluation.get_eval_class_metrics_by_run(db=db, run_id=clean_run_id)
+    adv_class_metrics = await crud_evaluation.get_eval_class_metrics_by_run(db=db, run_id=adv_run_id)
 
     # Build per-class robustness metrics
     per_class_robustness = {}

@@ -86,6 +86,7 @@ interface EvaluationRun {
     iou_threshold?: number
   }
   metrics_summary?: MetricsSummary
+  dataset_results?: any[]
   created_at: string
   started_at?: string
   ended_at?: string
@@ -115,6 +116,115 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
   const [attackDataset, setAttackDataset] = useState<Dataset | null>(null)
   const [loading, setLoading] = useState(true)
 
+  const sanitizeNumber = (value: any) => {
+    const parsed = typeof value === "string" ? parseFloat(value) : value
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  const normalizeMetrics = (metrics: MetricsSummary | null | undefined): MetricsSummary | null => {
+    if (!metrics) return null
+    return {
+      ...metrics,
+      map: sanitizeNumber(metrics.map),
+      map50: sanitizeNumber(metrics.map50),
+      map75: sanitizeNumber(metrics.map75),
+      ap: sanitizeNumber(metrics.ap ?? metrics.map),
+      ap50: sanitizeNumber(metrics.ap50 ?? metrics.map50),
+      ap75: sanitizeNumber(metrics.ap75 ?? metrics.map75),
+      precision: sanitizeNumber(metrics.precision),
+      recall: sanitizeNumber(metrics.recall),
+      f1: sanitizeNumber(metrics.f1),
+      ar_100: sanitizeNumber(metrics.ar_100),
+      original_metrics: metrics.original_metrics
+        ? {
+            ...metrics.original_metrics,
+            map: sanitizeNumber(metrics.original_metrics.map),
+            map50: sanitizeNumber(metrics.original_metrics.map50),
+            map75: sanitizeNumber(metrics.original_metrics.map75),
+            ap: sanitizeNumber(metrics.original_metrics.ap ?? metrics.original_metrics.map),
+            ap50: sanitizeNumber(metrics.original_metrics.ap50 ?? metrics.original_metrics.map50),
+            ap75: sanitizeNumber(metrics.original_metrics.ap75 ?? metrics.original_metrics.map75),
+            precision: sanitizeNumber(metrics.original_metrics.precision),
+            recall: sanitizeNumber(metrics.original_metrics.recall),
+            f1: sanitizeNumber(metrics.original_metrics.f1),
+            ar_100: sanitizeNumber(metrics.original_metrics.ar_100),
+          }
+        : undefined,
+    }
+  }
+
+  // Helper function to get attack dataset metrics
+  const getAttackDatasetMetrics = () => {
+    if (!evaluationRun) return null
+
+    // First try to find attack dataset result
+    const attackDatasetResult = evaluationRun.dataset_results?.find(
+      (dr: any) => dr.dataset_type === 'attack'
+    )
+
+    if (attackDatasetResult?.metrics_summary) {
+      console.log('[EvaluationDetailView] ✓ Using attack dataset_results metrics:', attackDatasetResult.metrics_summary)
+      return normalizeMetrics(attackDatasetResult.metrics_summary)
+    }
+
+    // Fallback 1: For post_attack evaluations, the attack metrics are in eval_run.metrics_summary.overall
+    // (This is the old structure before dataset_results was introduced)
+    if (evaluationRun.phase === 'post_attack' && evaluationRun.metrics_summary) {
+      console.log('[EvaluationDetailView] ⚠ Using eval_run.metrics_summary (fallback for post_attack):', evaluationRun.metrics_summary)
+      return normalizeMetrics(evaluationRun.metrics_summary as MetricsSummary)
+    }
+
+    // Fallback 2: General fallback
+    if (evaluationRun.metrics_summary) {
+      console.log('[EvaluationDetailView] ⚠ Using eval_run.metrics_summary (general fallback):', evaluationRun.metrics_summary)
+      return normalizeMetrics(evaluationRun.metrics_summary as MetricsSummary)
+    }
+
+    console.error('[EvaluationDetailView] ✗ No attack dataset metrics found!')
+    console.error('[EvaluationDetailView] dataset_results:', evaluationRun.dataset_results)
+    console.error('[EvaluationDetailView] metrics_summary:', evaluationRun.metrics_summary)
+    return null
+  }
+
+  // Helper function to get base dataset metrics
+  const getBaseDatasetMetrics = () => {
+    if (!evaluationRun) return null
+
+    // For post_attack evaluations, try dataset_results first
+    if (evaluationRun.phase === 'post_attack') {
+      const baseDatasetResult = evaluationRun.dataset_results?.find(
+        (dr: any) => dr.dataset_type === 'base'
+      )
+
+      if (baseDatasetResult?.metrics_summary) {
+        console.log('[EvaluationDetailView] ✓ Using base dataset_results metrics:', baseDatasetResult.metrics_summary)
+        return normalizeMetrics(baseDatasetResult.metrics_summary)
+      }
+
+      // Fallback to original_metrics in eval_run.metrics_summary
+      if (evaluationRun.metrics_summary?.original_metrics) {
+        console.log('[EvaluationDetailView] ⚠ Using original_metrics (fallback):', evaluationRun.metrics_summary.original_metrics)
+        return normalizeMetrics(evaluationRun.metrics_summary.original_metrics as MetricsSummary)
+      }
+
+      console.warn('[EvaluationDetailView] ⚠ No base dataset metrics found for post_attack, using eval_run.metrics_summary')
+    }
+
+    // For pre_attack or fallback, use eval_run.metrics_summary
+    if (evaluationRun.metrics_summary) {
+      console.log('[EvaluationDetailView] ✓ Using eval_run.metrics_summary for base metrics')
+        return normalizeMetrics(evaluationRun.metrics_summary as MetricsSummary)
+    }
+
+    console.error('[EvaluationDetailView] ✗ No base dataset metrics found!')
+    return null
+  }
+
+  // Derived metrics (updated each render from current evaluationRun)
+  const baseMetrics = getBaseDatasetMetrics()
+  const attackMetrics = getAttackDatasetMetrics()
+  const headerMetrics = evaluationRun?.phase === 'post_attack' ? attackMetrics : baseMetrics
+
   useEffect(() => {
     if (runId) {
       loadEvaluationData()
@@ -126,7 +236,32 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
     try {
       // Load evaluation run
       const run: any = await apiClient.getEvaluationRun(runId)
-      setEvaluationRun(run)
+
+      // Debug logging
+      console.log('[EvaluationDetailView] Loaded evaluation run:', {
+        id: run.id,
+        name: run.name,
+        phase: run.phase,
+        has_dataset_results: !!run.dataset_results,
+        dataset_results_count: run.dataset_results?.length || 0,
+        dataset_results: run.dataset_results,
+        metrics_summary_keys: run.metrics_summary ? Object.keys(run.metrics_summary) : []
+      })
+
+      let datasetResults = run.dataset_results
+      if (!datasetResults || datasetResults.length === 0) {
+        try {
+          const res = await fetch(`/api/evaluations/${runId}/dataset-results`)
+          if (res.ok) {
+            datasetResults = await res.json()
+            console.log('[EvaluationDetailView] Loaded dataset_results via fallback endpoint:', datasetResults?.length)
+          }
+        } catch (error) {
+          console.error('[EvaluationDetailView] Failed to load dataset_results fallback:', error)
+        }
+      }
+
+      setEvaluationRun({ ...run, dataset_results: datasetResults })
 
       // Load model
       if (run.model_id) {
@@ -334,30 +469,7 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                   </div>
                 </CardContent>
               </Card>
-
-              <Card className="bg-surface-container/50 border-border">
-                <CardContent className="pt-6">
-                  <div className="space-y-3">
-                    <p className="text-sm font-semibold text-foreground">평가 파라미터</p>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-xs text-muted">Confidence Threshold</p>
-                        <p className="text-base font-mono font-semibold text-foreground">
-                          {evaluationRun.params?.conf_threshold?.toFixed(2) || '0.25'}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted">IOU Threshold</p>
-                        <p className="text-base font-mono font-semibold text-primary">
-                          {evaluationRun.params?.iou_threshold?.toFixed(2) || '0.45'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {evaluationRun.metrics_summary && (
+              {headerMetrics && (
                 <Card className="bg-surface-container/50 border-border">
                   <CardContent className="pt-6">
                     <div className="flex items-center gap-3">
@@ -367,7 +479,7 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                           {evaluationRun.params?.target_class ? `${evaluationRun.params.target_class} AP@50` : 'mAP@50'}
                         </p>
                         <p className="text-2xl font-bold text-secondary">
-                          {((evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100).toFixed(1)}%
+                          {((headerMetrics.ap50 || headerMetrics.map50 || 0) * 100).toFixed(1)}%
                         </p>
                       </div>
                     </div>
@@ -476,6 +588,9 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                       <CardContent>
                         <div className={`grid gap-6 ${evaluationRun.phase === 'post_attack' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                           {/* 좌측: 기준 데이터셋 */}
+                          {(() => {
+                            const baseMetrics = getBaseDatasetMetrics()
+                            return (
                           <div className="space-y-3">
                             <div className="flex items-center gap-2 pb-2 border-b border-tertiary">
                               <Database className="w-5 h-5 text-tertiary" />
@@ -485,7 +600,7 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                               <div className="bg-surface-container rounded p-3">
                                 <p className="text-xs text-muted mb-1">F1 Score</p>
                                 <p className="text-xl font-bold text-tertiary">
-                                  {((evaluationRun.metrics_summary.original_metrics?.f1 || evaluationRun.metrics_summary.f1) * 100).toFixed(2)}%
+                                  {((baseMetrics?.f1 || 0) * 100).toFixed(2)}%
                                 </p>
                               </div>
                               <div className="bg-surface-container rounded p-3">
@@ -493,19 +608,19 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                   {evaluationRun.params?.target_class ? `${evaluationRun.params.target_class} AP@50` : 'mAP@50'}
                                 </p>
                                 <p className="text-xl font-bold text-secondary">
-                                  {((evaluationRun.metrics_summary.original_metrics?.ap50 || evaluationRun.metrics_summary.original_metrics?.map50 || evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100).toFixed(2)}%
+                                  {((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100).toFixed(2)}%
                                 </p>
                               </div>
                               <div className="bg-surface-container rounded p-3">
                                 <p className="text-xs text-muted mb-1">Precision</p>
                                 <p className="text-xl font-bold text-tertiary">
-                                  {((evaluationRun.metrics_summary.original_metrics?.precision || evaluationRun.metrics_summary.precision) * 100).toFixed(2)}%
+                                  {((baseMetrics?.precision || 0) * 100).toFixed(2)}%
                                 </p>
                               </div>
                               <div className="bg-surface-container rounded p-3">
                                 <p className="text-xs text-muted mb-1">Recall</p>
                                 <p className="text-xl font-bold text-tertiary">
-                                  {((evaluationRun.metrics_summary.original_metrics?.recall || evaluationRun.metrics_summary.recall) * 100).toFixed(2)}%
+                                  {((baseMetrics?.recall || 0) * 100).toFixed(2)}%
                                 </p>
                               </div>
                             </div>
@@ -517,12 +632,12 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                   data={(() => {
                                     const targetClass = evaluationRun.params?.target_class;
                                     const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                    const apMetricValue = (evaluationRun.metrics_summary.original_metrics?.ap50 || evaluationRun.metrics_summary.original_metrics?.map50 || evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100;
+                                    const apMetricValue = ((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100);
                                     return [
-                                      { metric: "F1 Score", value: ((evaluationRun.metrics_summary.original_metrics?.f1 || evaluationRun.metrics_summary.f1) * 100), color: "#f97316" },
+                                      { metric: "F1 Score", value: ((baseMetrics?.f1 || 0) * 100), color: "#f97316" },
                                       { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                      { metric: "Precision", value: ((evaluationRun.metrics_summary.original_metrics?.precision || evaluationRun.metrics_summary.precision) * 100), color: "var(--color-success)" },
-                                      { metric: "Recall", value: ((evaluationRun.metrics_summary.original_metrics?.recall || evaluationRun.metrics_summary.recall) * 100), color: "var(--color-warning)" },
+                                      { metric: "Precision", value: ((baseMetrics?.precision || 0) * 100), color: "var(--color-success)" },
+                                      { metric: "Recall", value: ((baseMetrics?.recall || 0) * 100), color: "var(--color-warning)" },
                                     ];
                                   })()}
                                   margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
@@ -543,12 +658,12 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                     {(() => {
                                       const targetClass = evaluationRun.params?.target_class;
                                       const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                      const apMetricValue = (evaluationRun.metrics_summary.original_metrics?.ap50 || evaluationRun.metrics_summary.original_metrics?.map50 || evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100;
+                                      const apMetricValue = ((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100);
                                       return [
-                                        { metric: "F1 Score", value: ((evaluationRun.metrics_summary.original_metrics?.f1 || evaluationRun.metrics_summary.f1) * 100), color: "#f97316" },
+                                        { metric: "F1 Score", value: ((baseMetrics?.f1 || 0) * 100), color: "#f97316" },
                                         { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                        { metric: "Precision", value: ((evaluationRun.metrics_summary.original_metrics?.precision || evaluationRun.metrics_summary.precision) * 100), color: "var(--color-success)" },
-                                        { metric: "Recall", value: ((evaluationRun.metrics_summary.original_metrics?.recall || evaluationRun.metrics_summary.recall) * 100), color: "var(--color-warning)" },
+                                        { metric: "Precision", value: ((baseMetrics?.precision || 0) * 100), color: "var(--color-success)" },
+                                        { metric: "Recall", value: ((baseMetrics?.recall || 0) * 100), color: "var(--color-warning)" },
                                       ].map((entry, index) => (
                                         <Cell key={`cell-${index}`} fill={entry.color} />
                                       ));
@@ -558,9 +673,13 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                               </ResponsiveContainer>
                             </div>
                           </div>
+                          )
+                          })()}
 
                           {/* 우측: 공격 데이터셋 (post_attack만) */}
-                          {evaluationRun.phase === 'post_attack' && (
+                          {evaluationRun.phase === 'post_attack' && (() => {
+                            const attackMetrics = getAttackDatasetMetrics()
+                            return (
                             <div className="space-y-3">
                               <div className="flex items-center gap-2 pb-2 border-b border-error">
                                 <Images className="w-5 h-5 text-error" />
@@ -570,25 +689,25 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                 <div className="bg-surface-container rounded p-3">
                                   <p className="text-xs text-muted mb-1">F1 Score</p>
                                   <p className="text-xl font-bold text-tertiary">
-                                    {(evaluationRun.metrics_summary.f1 * 100).toFixed(2)}%
+                                    {((attackMetrics?.f1 || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
                                 <div className="bg-surface-container rounded p-3">
                                   <p className="text-xs text-muted mb-1">{evaluationRun.params?.target_class ? `${evaluationRun.params.target_class} AP@50` : "mAP@50"}</p>
                                   <p className="text-xl font-bold text-secondary">
-                                    {((evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100).toFixed(2)}%
+                                    {((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
                                 <div className="bg-surface-container rounded p-3">
                                   <p className="text-xs text-muted mb-1">Precision</p>
                                   <p className="text-xl font-bold text-tertiary">
-                                    {(evaluationRun.metrics_summary.precision * 100).toFixed(2)}%
+                                    {((attackMetrics?.precision || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
                                 <div className="bg-surface-container rounded p-3">
                                   <p className="text-xs text-muted mb-1">Recall</p>
                                   <p className="text-xl font-bold text-tertiary">
-                                    {(evaluationRun.metrics_summary.recall * 100).toFixed(2)}%
+                                    {((attackMetrics?.recall || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
                               </div>
@@ -600,12 +719,15 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                     data={(() => {
                                       const targetClass = evaluationRun.params?.target_class;
                                       const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                      const apMetricValue = ((evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100);
+                                      const apMetricValue = ((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100);
+                                      const f1 = (attackMetrics?.f1 || 0) * 100;
+                                      const precision = (attackMetrics?.precision || 0) * 100;
+                                      const recall = (attackMetrics?.recall || 0) * 100;
                                       return [
-                                        { metric: "F1 Score", value: (evaluationRun.metrics_summary.f1 * 100), color: "#f97316" },
+                                        { metric: "F1 Score", value: f1, color: "#f97316" },
                                         { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                        { metric: "Precision", value: (evaluationRun.metrics_summary.precision * 100), color: "var(--color-success)" },
-                                        { metric: "Recall", value: (evaluationRun.metrics_summary.recall * 100), color: "var(--color-warning)" },
+                                        { metric: "Precision", value: precision, color: "var(--color-success)" },
+                                        { metric: "Recall", value: recall, color: "var(--color-warning)" },
                                       ];
                                     })()}
                                     margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
@@ -626,12 +748,15 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                       {(() => {
                                         const targetClass = evaluationRun.params?.target_class;
                                         const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                        const apMetricValue = ((evaluationRun.metrics_summary.ap50 || evaluationRun.metrics_summary.map50 || 0) * 100);
+                                        const apMetricValue = ((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100);
+                                        const f1 = (attackMetrics?.f1 || 0) * 100;
+                                        const precision = (attackMetrics?.precision || 0) * 100;
+                                        const recall = (attackMetrics?.recall || 0) * 100;
                                         return [
-                                          { metric: "F1 Score", value: (evaluationRun.metrics_summary.f1 * 100), color: "#f97316" },
+                                          { metric: "F1 Score", value: f1, color: "#f97316" },
                                           { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                          { metric: "Precision", value: (evaluationRun.metrics_summary.precision * 100), color: "var(--color-success)" },
-                                          { metric: "Recall", value: (evaluationRun.metrics_summary.recall * 100), color: "var(--color-warning)" },
+                                          { metric: "Precision", value: precision, color: "var(--color-success)" },
+                                          { metric: "Recall", value: recall, color: "var(--color-warning)" },
                                         ].map((entry, index) => (
                                           <Cell key={`cell-attack-${index}`} fill={entry.color} />
                                         ));
@@ -641,7 +766,8 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                                 </ResponsiveContainer>
                               </div>
                             </div>
-                          )}
+                            )
+                          })()}
                         </div>
                       </CardContent>
                     </Card>

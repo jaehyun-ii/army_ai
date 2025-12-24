@@ -501,41 +501,19 @@ export function UnifiedEvaluationDashboard() {
       // Create evaluation run(s)
       const createdRuns: any[] = []
 
+      // Note: When both base and attack datasets are selected,
+      // create a single post_attack evaluation run.
+      // The backend will automatically evaluate both datasets and create
+      // two eval_dataset_results (BASE and ATTACK) within the same eval_run.
       if (selectedBaseDataset && selectedAttackDataset) {
-        // Create two runs: one for clean, one for adversarial
-        addLog("→ 기준 데이터셋 평가 생성 중...")
-        const cleanRunDescription = description ? `${description}\n기준 데이터셋 평가` : "기준 데이터셋 평가"
+        // Create single run that evaluates both base and attack datasets
+        addLog("→ 비교 평가 생성 중 (기준 + 공격 데이터셋)...")
 
-        // Prepare clean run data based on dimension
-        const cleanRunData: any = {
-          name: `${evaluationName} (Clean)`,
-          description: cleanRunDescription,
-          phase: "pre_attack",
-          dimension: datasetDimension,
-          model_id: selectedModel,
-          params: targetClass ? { target_class: targetClass } : undefined,
-        }
-
-        // Use correct field based on dimension
-        if (datasetDimension === "3d") {
-          cleanRunData.base_dataset_3d_id = selectedBaseDataset
-        } else {
-          cleanRunData.base_dataset_id = selectedBaseDataset
-        }
-
-        console.log("📤 Creating clean evaluation run:", cleanRunData)
-        const cleanRun: any = await apiClient.createEvaluationRun(cleanRunData)
-        createdRuns.push(cleanRun)
-        addLog(`✓ 기준 평가 생성됨 (ID: ${cleanRun.id})`)
-
-        addLog("→ 공격 데이터셋 평가 생성 중...")
-        const advRunDescription = description ? `${description}\n공격 데이터셋 평가` : "공격 데이터셋 평가"
-
-        // Prepare adversarial run data based on dimension
-        const advRunData: any = {
-          name: `${evaluationName} (Adversarial)`,
-          description: advRunDescription,
-          phase: "post_attack",
+        // Prepare run data based on dimension
+        const runData: any = {
+          name: evaluationName,
+          description: description,
+          phase: "post_attack",  // This phase evaluates both base and attack
           dimension: datasetDimension,
           model_id: selectedModel,
           params: targetClass ? { target_class: targetClass } : undefined,
@@ -543,17 +521,18 @@ export function UnifiedEvaluationDashboard() {
 
         // Use correct fields based on dimension
         if (datasetDimension === "3d") {
-          advRunData.base_dataset_3d_id = selectedBaseDataset
-          advRunData.attack_dataset_3d_id = selectedAttackDataset
+          runData.base_dataset_3d_id = selectedBaseDataset
+          runData.attack_dataset_3d_id = selectedAttackDataset
         } else {
-          advRunData.base_dataset_id = selectedBaseDataset
-          advRunData.attack_dataset_id = selectedAttackDataset
+          runData.base_dataset_id = selectedBaseDataset
+          runData.attack_dataset_id = selectedAttackDataset
         }
 
-        console.log("📤 Creating adversarial evaluation run:", advRunData)
-        const advRun: any = await apiClient.createEvaluationRun(advRunData)
-        createdRuns.push(advRun)
-        addLog(`✓ 공격 평가 생성됨 (ID: ${advRun.id})`)
+        console.log("📤 Creating comparison evaluation run:", runData)
+        const run: any = await apiClient.createEvaluationRun(runData)
+        createdRuns.push(run)
+        addLog(`✓ 비교 평가 생성됨 (ID: ${run.id})`)
+        addLog(`  → 백엔드가 자동으로 기준 및 공격 데이터셋 모두 평가합니다`)
       } else {
         // Create single run
         const runData: any = {
@@ -726,6 +705,18 @@ export function UnifiedEvaluationDashboard() {
       for (const evalId of completedEvaluationIds) {
         // Fetch evaluation run details
         const evalRun: any = await apiClient.getEvaluationRun(evalId)
+        let datasetResults = evalRun.dataset_results
+        if (!datasetResults || datasetResults.length === 0) {
+          try {
+            const res = await fetch(`/api/evaluations/${evalId}/dataset-results`)
+            if (res.ok) {
+              datasetResults = await res.json()
+              console.log("[UnifiedEvaluationDashboard] Loaded dataset_results via fallback endpoint:", datasetResults?.length)
+            }
+          } catch (error) {
+            console.error("[UnifiedEvaluationDashboard] Failed to load dataset_results fallback:", error)
+          }
+        }
 
         // Load class metrics for target class display
         let classMetrics: any[] = []
@@ -749,6 +740,7 @@ export function UnifiedEvaluationDashboard() {
 
         results.push({
           ...evalRun,
+          dataset_results: datasetResults,
           classMetrics,
           targetClassName,
         })
@@ -824,6 +816,55 @@ export function UnifiedEvaluationDashboard() {
     } else {
       return { level: '신뢰성 매우 낮음', dropRate, color: 'text-error' }
     }
+  }
+
+  const sanitizeNumber = (value: any) => {
+    const parsed = typeof value === "string" ? parseFloat(value) : value
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  const hasCoreMetrics = (metrics: any) => {
+    if (!metrics) return false
+    return (
+      metrics.map !== undefined ||
+      metrics.map50 !== undefined ||
+      metrics.ap !== undefined ||
+      metrics.ap50 !== undefined ||
+      metrics.precision !== undefined ||
+      metrics.recall !== undefined ||
+      metrics.f1 !== undefined
+    )
+  }
+
+  const normalizeMetrics = (metrics: any) => {
+    if (!metrics) return null
+    return {
+      ...metrics,
+      map: sanitizeNumber(metrics.map),
+      map50: sanitizeNumber(metrics.map50),
+      map75: sanitizeNumber(metrics.map75),
+      ap: sanitizeNumber(metrics.ap ?? metrics.map),
+      ap50: sanitizeNumber(metrics.ap50 ?? metrics.map50),
+      ap75: sanitizeNumber(metrics.ap75 ?? metrics.map75),
+      precision: sanitizeNumber(metrics.precision),
+      recall: sanitizeNumber(metrics.recall),
+      f1: sanitizeNumber(metrics.f1),
+    }
+  }
+
+  const getDatasetMetrics = (run: any, datasetType: "base" | "attack") => {
+    if (!run) return null
+    const datasetResult = run.dataset_results?.find((dr: any) => dr.dataset_type === datasetType)
+    if (datasetResult?.metrics_summary) {
+      return normalizeMetrics(datasetResult.metrics_summary)
+    }
+    if (datasetType === "base" && run.metrics_summary?.original_metrics) {
+      return normalizeMetrics(run.metrics_summary.original_metrics)
+    }
+    if (hasCoreMetrics(run.metrics_summary)) {
+      return normalizeMetrics(run.metrics_summary)
+    }
+    return null
   }
 
   return (
@@ -1141,32 +1182,23 @@ export function UnifiedEvaluationDashboard() {
                       const preRun = evaluationResults.find((r: any) => r.phase === 'pre_attack')
                       const postRun = evaluationResults.find((r: any) => r.phase === 'post_attack')
 
-                      // Get target class name from params
-                      const targetClassName = preRun?.params?.target_class || postRun?.params?.target_class || null
+                      const baseMetrics = preRun
+                        ? getDatasetMetrics(preRun, "base")
+                        : getDatasetMetrics(postRun, "base")
+                      const attackMetrics = postRun ? getDatasetMetrics(postRun, "attack") : null
 
-                      // Get AP@50 values for target class or overall
-                      let baseAP50 = 0
-                      let attackAP50 = 0
-
-                      // For base AP@50: use preRun if exists, otherwise use original_metrics from postRun
-                      if (preRun?.metrics_summary) {
-                        baseAP50 = (preRun.metrics_summary.ap50 || preRun.metrics_summary.map50 || 0) * 100
-                      } else if (postRun?.metrics_summary?.original_metrics) {
-                        baseAP50 = (postRun.metrics_summary.original_metrics.ap50 || postRun.metrics_summary.original_metrics.map50 || 0) * 100
-                      }
-
-                      // For attack AP@50: use postRun's current metrics
-                      if (postRun?.metrics_summary) {
-                        attackAP50 = (postRun.metrics_summary.ap50 || postRun.metrics_summary.map50 || 0) * 100
-                      }
+                      const baseAP50 = ((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100)
+                      const attackAP50 = ((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100)
 
                       // Calculate reliability
                       const reliability = postRun ? calculateReliability(baseAP50, attackAP50) : null
 
                       // Use attack run if exists, otherwise use pre run
                       const displayRun = postRun || preRun
+                      const displayMetrics = postRun ? attackMetrics : baseMetrics
+                      const targetClassName = displayMetrics?.target_class || displayRun?.params?.target_class || null
 
-                      if (!displayRun) return null
+                      if (!displayRun || !displayMetrics) return null
 
                       return (
                         <Card key="unified-result" className="bg-surface-container/50 border-border">
@@ -1182,19 +1214,19 @@ export function UnifiedEvaluationDashboard() {
                                   <CardContent className="p-4">
                                     <p className="text-xs text-muted mb-1">F1 Score</p>
                                     <p className="text-2xl font-bold text-tertiary">
-                                      {((displayRun.metrics_summary?.f1 || 0) * 100).toFixed(1)}%
+                                      {((displayMetrics.f1 || 0) * 100).toFixed(1)}%
                                     </p>
                                   </CardContent>
                                 </Card>
                                 <Card className="bg-surface-container border-border">
                                   <CardContent className="p-4">
                                     <p className="text-xs text-muted mb-1">
-                                      {displayRun.metrics_summary?.target_class
-                                        ? `${getKoreanClassName(displayRun.metrics_summary.target_class)} AP@50`
+                                      {targetClassName
+                                        ? `${getKoreanClassName(targetClassName)} AP@50`
                                         : 'mAP@50'}
                                     </p>
                                     <p className="text-2xl font-bold text-secondary">
-                                      {((displayRun.metrics_summary?.ap50 || displayRun.metrics_summary?.map50 || 0) * 100).toFixed(1)}%
+                                      {((displayMetrics.ap50 || displayMetrics.map50 || 0) * 100).toFixed(1)}%
                                     </p>
                                   </CardContent>
                                 </Card>
@@ -1202,7 +1234,7 @@ export function UnifiedEvaluationDashboard() {
                                   <CardContent className="p-4">
                                     <p className="text-xs text-muted mb-1">Precision</p>
                                     <p className="text-2xl font-bold text-tertiary">
-                                      {(displayRun.metrics_summary?.precision * 100).toFixed(1)}%
+                                      {((displayMetrics.precision || 0) * 100).toFixed(1)}%
                                     </p>
                                   </CardContent>
                                 </Card>
@@ -1210,21 +1242,21 @@ export function UnifiedEvaluationDashboard() {
                                   <CardContent className="p-4">
                                     <p className="text-xs text-muted mb-1">Recall</p>
                                     <p className="text-2xl font-bold text-info">
-                                      {(displayRun.metrics_summary?.recall * 100).toFixed(1)}%
+                                      {((displayMetrics.recall || 0) * 100).toFixed(1)}%
                                     </p>
                                   </CardContent>
                                 </Card>
                               </div>
 
                               {/* Target Class Info */}
-                              {displayRun.metrics_summary?.target_class && (
+                              {targetClassName && (
                                 <div className="mt-4 bg-primary-container border border-primary rounded-lg p-3">
                                   <div className="flex items-start gap-2">
                                     <Info className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
                                     <div className="text-xs text-primary">
                                       <strong>AP (Average Precision)</strong>: IoU threshold 0.5~0.95 평균
                                       <br />
-                                      타겟 클래스 "<strong>{getKoreanClassName(displayRun.metrics_summary.target_class)}</strong>"만 평가되었습니다
+                                      타겟 클래스 "<strong>{getKoreanClassName(targetClassName)}</strong>"만 평가되었습니다
                                     </div>
                                   </div>
                                 </div>
