@@ -58,7 +58,7 @@ def get_patch_intensity_preset(attack_method: str, intensity_level: str) -> dict
             "strong": {"iterations": 500, "patch_size": 200, "description": "강한 Robust D-Patch (효과성 우선)"},
         },
         "naturalistic": {
-            "weak": {"iterations": 500, "patch_size": 128, "description": "약한 자연스러운 패치 (높은 은폐성)"},
+            "weak": {"iterations": 100, "patch_size": 128, "description": "약한 자연스러운 패치 (높은 은폐성)"},
             "medium": {"iterations": 1000, "patch_size": 128, "description": "보통 자연스러운 패치 (균형)"},
             "strong": {"iterations": 2000, "patch_size": 128, "description": "강한 자연스러운 패치 (효과성 우선)"},
         },
@@ -417,6 +417,21 @@ class PatchService:
                 # Naturalistic patch using BigGAN
                 from app.ai.attacks.evasion import NaturalisticPatchPyTorch
 
+                # Deformator is required for naturalistic patches
+                # Use storage path (works both in container and host with volume mount)
+                deformator_path = Path("/storage/gan_weights/deformators/BigGAN/models/deformator_0.pt")
+
+                if not deformator_path.exists():
+                    error_msg = (
+                        f"BigGAN deformator가 필요합니다: {deformator_path}\n"
+                        f"파일이 존재하지 않습니다. GAN 가중치를 다운로드하세요."
+                    )
+                    await sse_logger.error(error_msg)
+                    raise FileNotFoundError(error_msg)
+
+                enable_deformator = True
+                await sse_logger.info(f"BigGAN deformator 사용: {deformator_path}")
+
                 attack = NaturalisticPatchPyTorch(
                     estimator=estimator,
                     gan_class_id=259,  # Default to Pomeranian (can be parameterized later)
@@ -427,7 +442,11 @@ class PatchService:
                     max_iter=iterations,
                     batch_size=optimal_batch_size,
                     max_latent_value=8.0,
-                    enable_deformator=False,  # Start without deformator
+                    enable_deformator=enable_deformator,
+                    deformator_path=str(deformator_path) if deformator_path else None,
+                    enable_shift_deformator=True,
+                    enable_latent_rounding=True,
+                    enable_appearance_aug=True,
                     summary_writer=False,  # Disable TensorBoard (use tqdm for progress instead)
                     verbose=True,
                 )
@@ -537,11 +556,21 @@ class PatchService:
             # Step 6: Save patch file
             await sse_logger.status("패치 파일 저장 중...")
 
-            # Convert patch to image format
-            # All PyTorch attacks return CHW, convert to HWC for saving
-            patch_img = np.transpose(patch, (1, 2, 0))  # CHW → HWC
+            # Convert patch to image format (handle CHW or HWC)
+            if patch.ndim != 3:
+                raise ValueError(f"Unexpected patch shape: {patch.shape}")
 
-            # Clip and convert to uint8
+            if patch.shape[0] in (1, 3) and patch.shape[2] not in (1, 3):
+                patch_img = np.transpose(patch, (1, 2, 0))  # CHW → HWC
+            elif patch.shape[2] in (1, 3):
+                patch_img = patch  # already HWC
+            else:
+                patch_img = np.transpose(patch, (1, 2, 0))  # fallback to CHW → HWC
+
+            # Clip and convert to uint8 (auto-scale if patch is in 0-1 range)
+            patch_img = patch_img.astype(np.float32)
+            if patch_img.max() <= 1.5:
+                patch_img = patch_img * 255.0
             patch_img = np.clip(patch_img, 0, 255).astype(np.uint8)
 
             # Convert RGB to BGR for OpenCV

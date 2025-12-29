@@ -94,7 +94,7 @@ class EvaluationService:
         db: AsyncSession,
         eval_run_id: UUID,
         conf_threshold: float = 0.25,
-        iou_threshold: float = 0.45,
+        iou_threshold: float = 0.5,  # Fixed at 0.5 for precision/recall (AP is calculated for all IoUs 0.5~0.95)
         target_class: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> None:

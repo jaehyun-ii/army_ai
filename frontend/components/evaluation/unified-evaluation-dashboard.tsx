@@ -80,7 +80,7 @@ export function UnifiedEvaluationDashboard() {
 
   // Evaluation parameters
   const confThreshold = 0.25  // Fixed confidence threshold
-  const [iouThreshold, setIouThreshold] = useState(0.45)
+  const iouThreshold = 0.5  // Fixed IOU threshold (all IoU thresholds 0.5~0.95 are calculated automatically)
 
   // Data states
   const models: Model[] = useMemo(() => modelsData || [], [modelsData])
@@ -1036,29 +1036,6 @@ export function UnifiedEvaluationDashboard() {
                 </div>
               </div>
             )}
-
-            {/* Evaluation Parameters */}
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-foreground">IOU Threshold</Label>
-                  <span className="text-sm font-mono text-primary font-semibold">{iouThreshold.toFixed(2)}</span>
-                </div>
-                <Slider
-                  value={[iouThreshold]}
-                  onValueChange={(values) => {
-                    const newValue = Math.round(values[0] * 20) / 20
-                    console.log('[IOU Threshold] Changed to:', newValue)
-                    setIouThreshold(newValue)
-                  }}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  className="w-full"
-                />
-                <p className="text-xs text-muted">예측 박스와 실제 박스의 겹침 비율 (0.00 ~ 1.00)</p>
-              </div>
-            </div>
 
             {/* Evaluation Summary */}
             {(selectedBaseDataset || selectedAttackDataset) && (

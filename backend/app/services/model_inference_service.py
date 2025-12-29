@@ -80,7 +80,7 @@ class ModelInferenceService:
         version_id: str,
         image: np.ndarray,
         conf_threshold: float = 0.25,
-        iou_threshold: float = 0.45,
+        iou_threshold: float = 0.5,  # Standard IoU threshold (not used for NMS in ART estimators)
         target_class: Optional[str] = None,
     ) -> DetectionResult:
         """

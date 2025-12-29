@@ -174,9 +174,41 @@ def load_biggan(
         )
         deformator = deformator.to(device).eval()
 
+        annotation_path = Path(deformator_path).parent.parent / "human_annotation.txt"
+        annotation = _load_human_annotation(annotation_path)
+        if annotation:
+            setattr(deformator, "annotation", annotation)
+            logger.info(f"Loaded {len(annotation)} human-annotated directions")
+
         logger.info("Deformator loaded successfully")
 
     return generator, deformator
+
+
+def _load_human_annotation(annotation_path: Path) -> dict[str, int]:
+    annotation_dict: dict[str, int] = {}
+    if not annotation_path.is_file():
+        return annotation_dict
+
+    with annotation_path.open() as source:
+        for line in source.readlines():
+            if ": " not in line:
+                continue
+            idx_str, annotation = line.split(": ", 1)
+            annotation = annotation.strip()
+            if not annotation:
+                continue
+            annotation_key = annotation.replace(" ", "_")
+            suffix = 1
+            unique_key = annotation_key
+            while unique_key in annotation_dict:
+                suffix += 1
+                unique_key = f"{annotation_key}_{suffix}"
+            try:
+                annotation_dict[unique_key] = int(idx_str)
+            except ValueError:
+                continue
+    return annotation_dict
 
 
 def generate_from_latent(

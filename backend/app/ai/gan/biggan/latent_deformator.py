@@ -22,8 +22,8 @@ class LatentDeformator(nn.Module):
         super(LatentDeformator, self).__init__()
         self.type = type
         self.shift_dim = shift_dim
-        self.input_dim = input_dim if input_dim is not None else np.product(shift_dim)
-        self.out_dim = out_dim if out_dim is not None else np.product(shift_dim)
+        self.input_dim = input_dim if input_dim is not None else np.prod(shift_dim)
+        self.out_dim = out_dim if out_dim is not None else np.prod(shift_dim)
 
         if self.type == DeformatorType.FC:
             self.fc1 = nn.Linear(self.input_dim, inner_dim)
@@ -87,7 +87,7 @@ class LatentDeformator(nn.Module):
             self.linear = self.linear.to(input.device)
             out = F.linear(input, self.linear)
 
-        flat_shift_dim = np.product(self.shift_dim)
+        flat_shift_dim = np.prod(self.shift_dim)
         if out.shape[1] < flat_shift_dim:
             padding = torch.zeros([out.shape[0], flat_shift_dim - out.shape[1]], device=out.device)
             out = torch.cat([out, padding], dim=1)
