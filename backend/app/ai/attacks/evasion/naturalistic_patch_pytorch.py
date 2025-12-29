@@ -725,6 +725,17 @@ class NaturalisticPatchPyTorch(EvasionAttack):
                 target_class=target_class,
             )
 
+            # Debug logging for first iteration
+            if iteration == 0:
+                batch_size = images_tensor.size(0)
+                total_boxes = sum([len(label["boxes"]) for label in labels]) if labels else 0
+                logger.info(f"=== NAP First Iteration Debug ===")
+                logger.info(f"Batch size: {batch_size}")
+                logger.info(f"Total boxes: {total_boxes}")
+                logger.info(f"Images range: [{images_tensor.min():.2f}, {images_tensor.max():.2f}]")
+                logger.info(f"Patch range: [{patch.min():.2f}, {patch.max():.2f}]")
+                logger.info(f"Patched images range: [{patched_images.min():.2f}, {patched_images.max():.2f}]")
+
             # Compute detection loss and overlap score
             loss_det, overlap_score = self._compute_detection_loss(
                 patched_images,
@@ -732,6 +743,13 @@ class NaturalisticPatchPyTorch(EvasionAttack):
                 target_class=target_class,
                 clean_images=clean_images_tensor,
             )
+
+            # Debug logging for first iteration (after loss computation)
+            if iteration == 0:
+                logger.info(f"Raw detection loss: {loss_det.item():.4f}")
+                logger.info(f"Loss requires_grad: {loss_det.requires_grad}")
+                if hasattr(self, 'latent_shift') and self.latent_shift.requires_grad:
+                    logger.info(f"Latent shift requires_grad: True")
 
             # Compute total variation loss
             loss_tv = self.tv_loss_fn(patch)
@@ -747,6 +765,17 @@ class NaturalisticPatchPyTorch(EvasionAttack):
 
             # Backward pass
             loss.backward()
+
+            # Debug logging for first iteration (after backward)
+            if iteration == 0:
+                if hasattr(self, 'latent_shift') and self.latent_shift.grad is not None:
+                    grad_norm = torch.norm(self.latent_shift.grad).item()
+                    grad_max = torch.max(torch.abs(self.latent_shift.grad)).item()
+                    logger.info(f"Latent gradient norm: {grad_norm:.6f}")
+                    logger.info(f"Latent gradient max: {grad_max:.6f}")
+                else:
+                    logger.warning("No gradient on latent_shift!")
+
             self.optimizer.step()
 
             # Log progress
