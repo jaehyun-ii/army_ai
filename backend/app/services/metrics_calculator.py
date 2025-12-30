@@ -223,6 +223,7 @@ def calculate_ap_ar_all_ious(
     Calculate AP and AR across multiple IoU thresholds.
 
     Returns mAP@[.5:.95] (COCO style: average over IoU 0.5 to 0.95 in 0.05 steps)
+    Also includes per-IoU precision/recall/f1 for 0.5, 0.75, 0.95
     """
     if iou_thresholds is None:
         # COCO standard: 0.5 to 0.95 in steps of 0.05
@@ -240,17 +241,32 @@ def calculate_ap_ar_all_ious(
         ar_10_per_iou.append(metrics["ar_10"])
         ar_100_per_iou.append(metrics["ar_100"])
 
-    # Calculate specific IoU thresholds
-    ap_50 = calculate_ap_ar_at_iou(predictions, ground_truths, 0.5)["ap"]
-    ap_75 = calculate_ap_ar_at_iou(predictions, ground_truths, 0.75)["ap"]
+    # Calculate specific IoU thresholds with precision/recall/f1
+    metrics_50 = calculate_ap_ar_at_iou(predictions, ground_truths, 0.5)
+    metrics_75 = calculate_ap_ar_at_iou(predictions, ground_truths, 0.75)
+    metrics_95 = calculate_ap_ar_at_iou(predictions, ground_truths, 0.95)
+
+    # Calculate F1 scores
+    def calc_f1(precision: float, recall: float) -> float:
+        return (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
         "map": float(np.mean(ap_per_iou)),  # mAP@[.5:.95]
-        "map50": float(ap_50),  # mAP@50
-        "map75": float(ap_75),  # mAP@75
+        "map50": float(metrics_50["ap"]),  # mAP@50
+        "map75": float(metrics_75["ap"]),  # mAP@75
         "ar_1": float(np.mean(ar_1_per_iou)),
         "ar_10": float(np.mean(ar_10_per_iou)),
         "ar_100": float(np.mean(ar_100_per_iou)),
+        # Per-IoU metrics for UI selection
+        "precision_iou50": float(metrics_50["precision"]),
+        "recall_iou50": float(metrics_50["recall"]),
+        "f1_iou50": float(calc_f1(metrics_50["precision"], metrics_50["recall"])),
+        "precision_iou75": float(metrics_75["precision"]),
+        "recall_iou75": float(metrics_75["recall"]),
+        "f1_iou75": float(calc_f1(metrics_75["precision"], metrics_75["recall"])),
+        "precision_iou95": float(metrics_95["precision"]),
+        "recall_iou95": float(metrics_95["recall"]),
+        "f1_iou95": float(calc_f1(metrics_95["precision"], metrics_95["recall"])),
     }
 
 

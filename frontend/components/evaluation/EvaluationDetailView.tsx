@@ -118,6 +118,7 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
   const [baseDataset, setBaseDataset] = useState<Dataset | null>(null)
   const [attackDataset, setAttackDataset] = useState<Dataset | null>(null)
   const [loading, setLoading] = useState(true)
+  const [selectedIoU, setSelectedIoU] = useState<"0.50" | "0.75" | "0.95">("0.50")
 
   // Fetch data using hooks
   const prCurveQuery = usePRCurveData(runId, !!runId)
@@ -557,116 +558,81 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                   {/* 성능 지표 비교: 기준 vs 공격 */}
                   {evaluationRun.metrics_summary && (
                     <div className="space-y-6">
-                      {/* 성능 지표 카드 */}
-                      <Card className="bg-surface-container/50 border-border">
+                      {/* AP 메트릭과 Classification 메트릭을 2열로 배치 */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* AP 메트릭 카드 (IoU 독립적) */}
+                        <Card className="bg-surface-container/50 border-border">
                         <CardHeader>
-                          <CardTitle className="text-primary">주요 성능 지표</CardTitle>
+                          <CardTitle className="text-primary">Average Precision (AP) 메트릭</CardTitle>
+                          <p className="text-sm text-muted mt-2">
+                            전체 confidence threshold 범위에서 계산된 Average Precision
+                          </p>
                         </CardHeader>
                         <CardContent>
-                          <div className={`grid gap-6 ${evaluationRun.phase === 'post_attack' ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
-                            {/* 기준 데이터셋 */}
-                            <div className="space-y-4">
-                              <div className="flex items-center gap-2 pb-3 border-b-2 border-tertiary">
-                                <Database className="w-5 h-5 text-tertiary" />
-                                <h3 className="text-lg font-semibold text-tertiary">기준 데이터셋</h3>
+                          <div className="space-y-4">
+                            {/* 기준 데이터셋 AP 메트릭 */}
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2">
+                                <Database className="w-4 h-4 text-tertiary" />
+                                <h3 className="text-sm font-semibold text-tertiary">기준 데이터셋</h3>
                               </div>
-                              <div className="grid grid-cols-3 gap-4">
-                                {/* 첫 번째 행: F1 Score, Precision, Recall */}
-                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-tertiary transition-colors">
-                                  <p className="text-xs text-muted mb-2">F1 Score</p>
-                                  <p className="text-2xl font-bold text-tertiary">
-                                    {((baseMetrics?.f1 || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-tertiary transition-colors">
-                                  <p className="text-xs text-muted mb-2">Precision</p>
-                                  <p className="text-2xl font-bold text-tertiary">
-                                    {((baseMetrics?.precision || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-tertiary transition-colors">
-                                  <p className="text-xs text-muted mb-2">Recall</p>
-                                  <p className="text-2xl font-bold text-tertiary">
-                                    {((baseMetrics?.recall || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                                {/* 두 번째 행: AP@50, AP@75, AP@50:95 */}
-                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
-                                  <p className="text-xs text-muted mb-2">
+                              <div className="grid grid-cols-3 gap-3">
+                                <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-1">
                                     {evaluationRun.params?.target_class ? `AP@50` : 'mAP@50'}
                                   </p>
-                                  <p className="text-2xl font-bold text-secondary">
+                                  <p className="text-xl font-bold text-secondary">
                                     {((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
-                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
-                                  <p className="text-xs text-muted mb-2">
+                                <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-1">
                                     {evaluationRun.params?.target_class ? `AP@75` : 'mAP@75'}
                                   </p>
-                                  <p className="text-2xl font-bold text-secondary">
+                                  <p className="text-xl font-bold text-secondary">
                                     {((baseMetrics?.ap75 || baseMetrics?.map75 || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
-                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
-                                  <p className="text-xs text-muted mb-2">
+                                <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-1">
                                     {evaluationRun.params?.target_class ? `AP@50:95` : 'mAP@50:95'}
                                   </p>
-                                  <p className="text-2xl font-bold text-secondary">
+                                  <p className="text-xl font-bold text-secondary">
                                     {((baseMetrics?.ap || baseMetrics?.map || 0) * 100).toFixed(2)}%
                                   </p>
                                 </div>
                               </div>
                             </div>
 
-                            {/* 공격 데이터셋 (post_attack만) */}
+                            {/* 공격 데이터셋 AP 메트릭 */}
                             {evaluationRun.phase === 'post_attack' && (
-                              <div className="space-y-4">
-                                <div className="flex items-center gap-2 pb-3 border-b-2 border-error">
-                                  <Images className="w-5 h-5 text-error" />
-                                  <h3 className="text-lg font-semibold text-error">공격 데이터셋</h3>
+                              <div className="space-y-3">
+                                <div className="flex items-center gap-2">
+                                  <Images className="w-4 h-4 text-error" />
+                                  <h3 className="text-sm font-semibold text-error">공격 데이터셋</h3>
                                 </div>
-                                <div className="grid grid-cols-3 gap-4">
-                                  {/* 첫 번째 행: F1 Score, Precision, Recall */}
-                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-error transition-colors">
-                                    <p className="text-xs text-muted mb-2">F1 Score</p>
-                                    <p className="text-2xl font-bold text-tertiary">
-                                      {((attackMetrics?.f1 || 0) * 100).toFixed(2)}%
-                                    </p>
-                                  </div>
-                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-error transition-colors">
-                                    <p className="text-xs text-muted mb-2">Precision</p>
-                                    <p className="text-2xl font-bold text-tertiary">
-                                      {((attackMetrics?.precision || 0) * 100).toFixed(2)}%
-                                    </p>
-                                  </div>
-                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-error transition-colors">
-                                    <p className="text-xs text-muted mb-2">Recall</p>
-                                    <p className="text-2xl font-bold text-tertiary">
-                                      {((attackMetrics?.recall || 0) * 100).toFixed(2)}%
-                                    </p>
-                                  </div>
-                                  {/* 두 번째 행: AP@50, AP@75, AP@50:95 */}
-                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
-                                    <p className="text-xs text-muted mb-2">
+                                <div className="grid grid-cols-3 gap-3">
+                                  <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-1">
                                       {evaluationRun.params?.target_class ? `AP@50` : 'mAP@50'}
                                     </p>
-                                    <p className="text-2xl font-bold text-secondary">
+                                    <p className="text-xl font-bold text-secondary">
                                       {((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100).toFixed(2)}%
                                     </p>
                                   </div>
-                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
-                                    <p className="text-xs text-muted mb-2">
+                                  <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-1">
                                       {evaluationRun.params?.target_class ? `AP@75` : 'mAP@75'}
                                     </p>
-                                    <p className="text-2xl font-bold text-secondary">
+                                    <p className="text-xl font-bold text-secondary">
                                       {((attackMetrics?.ap75 || attackMetrics?.map75 || 0) * 100).toFixed(2)}%
                                     </p>
                                   </div>
-                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
-                                    <p className="text-xs text-muted mb-2">
+                                  <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-1">
                                       {evaluationRun.params?.target_class ? `AP@50:95` : 'mAP@50:95'}
                                     </p>
-                                    <p className="text-2xl font-bold text-secondary">
+                                    <p className="text-xl font-bold text-secondary">
                                       {((attackMetrics?.ap || attackMetrics?.map || 0) * 100).toFixed(2)}%
                                     </p>
                                   </div>
@@ -676,6 +642,113 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                           </div>
                         </CardContent>
                       </Card>
+
+                      {/* IoU-dependent 메트릭 카드 */}
+                      <Card className="bg-surface-container/50 border-border">
+                        <CardHeader>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <CardTitle className="text-primary">Classification 메트릭 (IoU Threshold별)</CardTitle>
+                              <p className="text-sm text-muted mt-2">
+                                선택한 IoU threshold에서의 Precision, Recall, F1 Score
+                              </p>
+                            </div>
+                            <Tabs value={selectedIoU} onValueChange={(value) => setSelectedIoU(value as any)}>
+                              <TabsList className="bg-surface-container">
+                                <TabsTrigger value="0.50" className="text-xs">IoU 0.50</TabsTrigger>
+                                <TabsTrigger value="0.75" className="text-xs">IoU 0.75</TabsTrigger>
+                                <TabsTrigger value="0.95" className="text-xs">IoU 0.95</TabsTrigger>
+                              </TabsList>
+                            </Tabs>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-4">
+                            {/* 기준 데이터셋 Classification 메트릭 */}
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2">
+                                <Database className="w-4 h-4 text-tertiary" />
+                                <h3 className="text-sm font-semibold text-tertiary">기준 데이터셋</h3>
+                              </div>
+                              <div className="grid grid-cols-3 gap-3">
+                                <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-1">F1 Score</p>
+                                  <p className="text-xl font-bold text-secondary">
+                                    {(() => {
+                                      const iouKey = selectedIoU.replace('.', '')
+                                      const f1 = baseMetrics?.[`f1_iou${iouKey}` as keyof typeof baseMetrics] || baseMetrics?.f1 || 0
+                                      return ((f1 as number) * 100).toFixed(2)
+                                    })()}%
+                                  </p>
+                                </div>
+                                <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-1">Precision</p>
+                                  <p className="text-xl font-bold text-secondary">
+                                    {(() => {
+                                      const iouKey = selectedIoU.replace('.', '')
+                                      const precision = baseMetrics?.[`precision_iou${iouKey}` as keyof typeof baseMetrics] || baseMetrics?.precision || 0
+                                      return ((precision as number) * 100).toFixed(2)
+                                    })()}%
+                                  </p>
+                                </div>
+                                <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-1">Recall</p>
+                                  <p className="text-xl font-bold text-secondary">
+                                    {(() => {
+                                      const iouKey = selectedIoU.replace('.', '')
+                                      const recall = baseMetrics?.[`recall_iou${iouKey}` as keyof typeof baseMetrics] || baseMetrics?.recall || 0
+                                      return ((recall as number) * 100).toFixed(2)
+                                    })()}%
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* 공격 데이터셋 Classification 메트릭 */}
+                            {evaluationRun.phase === 'post_attack' && (
+                              <div className="space-y-3">
+                                <div className="flex items-center gap-2">
+                                  <Images className="w-4 h-4 text-error" />
+                                  <h3 className="text-sm font-semibold text-error">공격 데이터셋</h3>
+                                </div>
+                                <div className="grid grid-cols-3 gap-3">
+                                  <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-1">F1 Score</p>
+                                    <p className="text-xl font-bold text-secondary">
+                                      {(() => {
+                                        const iouKey = selectedIoU.replace('.', '')
+                                        const f1 = attackMetrics?.[`f1_iou${iouKey}` as keyof typeof attackMetrics] || attackMetrics?.f1 || 0
+                                        return ((f1 as number) * 100).toFixed(2)
+                                      })()}%
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-1">Precision</p>
+                                    <p className="text-xl font-bold text-secondary">
+                                      {(() => {
+                                        const iouKey = selectedIoU.replace('.', '')
+                                        const precision = attackMetrics?.[`precision_iou${iouKey}` as keyof typeof attackMetrics] || attackMetrics?.precision || 0
+                                        return ((precision as number) * 100).toFixed(2)
+                                      })()}%
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container rounded-lg p-3 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-1">Recall</p>
+                                    <p className="text-xl font-bold text-secondary">
+                                      {(() => {
+                                        const iouKey = selectedIoU.replace('.', '')
+                                        const recall = attackMetrics?.[`recall_iou${iouKey}` as keyof typeof attackMetrics] || attackMetrics?.recall || 0
+                                        return ((recall as number) * 100).toFixed(2)
+                                      })()}%
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                      </div>
 
                       {/* 성능 비교 차트 */}
                       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
