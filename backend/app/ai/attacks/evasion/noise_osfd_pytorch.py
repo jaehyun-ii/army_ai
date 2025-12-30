@@ -11,7 +11,7 @@ External interface remains NumPy-based for ART compatibility.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import numpy as np
 import torch
@@ -395,6 +395,7 @@ class NoiseOSFDPyTorch(EvasionAttack):
         verbose: bool = True,
         lr_scheduler_type: str = "constant",
         lr_scheduler_params: dict | None = None,
+        progress_callback: Optional[Callable[[int, int, float, float], None]] = None,
     ):
         """
         Create a NoiseOSFDPyTorch attack instance.
@@ -431,6 +432,7 @@ class NoiseOSFDPyTorch(EvasionAttack):
         self.verbose = verbose
         self.lr_scheduler_type = lr_scheduler_type
         self.lr_scheduler_params = lr_scheduler_params if lr_scheduler_params is not None else {}
+        self.progress_callback = progress_callback
         self.clip_min, self.clip_max = self._get_clip_bounds()
         self._check_params()
 
@@ -656,12 +658,22 @@ class NoiseOSFDPyTorch(EvasionAttack):
             if scheduler is not None:
                 scheduler.step()
 
+            # Get current learning rate
+            current_lr = optimizer.param_groups[0]['lr']
+
             # Logging
             if self.verbose and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
                 logger.info(
                     f"Iter {i_iter}/{self.max_iter}: Avg OSFD Loss = {avg_epoch_loss:.6f}, "
-                    f"Layers: {avg_layer_losses}"
+                    f"LR = {current_lr:.6f}, Layers: {avg_layer_losses}"
                 )
+
+            # Progress callback for SSE updates
+            if self.progress_callback and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
+                try:
+                    self.progress_callback(i_iter, self.max_iter, avg_epoch_loss, current_lr)
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
 
     def _check_params(self):
         """Check validity of parameters."""

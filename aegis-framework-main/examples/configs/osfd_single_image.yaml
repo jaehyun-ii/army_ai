@@ -1,0 +1,49 @@
+attack_name: "OSFD Feature Attack on a Single Image (Surrogate: YOLOv12x)"
+
+# --- Attack Configuration ---
+attack:
+  params:
+    type: "osfd"  # Specifies the OSFDAttack class
+    
+    # The max intensity of the noise perturbation
+    epsilon: 8 
+    
+    # The factor by which to amplify the benign features to create the target
+    amplification_factor_k: 3.0
+    
+    # Intermediate layer indices of the YOLOv8 model to attack.
+    # These are common choices in the YOLOv8 backbone.
+    feature_layers_to_attack: [2, 4, 6]
+    
+    # Image size for the perturbation and input
+    img_size: [480, 640]
+
+  # loss_params is not needed for OSFD as it uses its own internal MSE loss
+  loss_params: {}
+
+# --- Victim Model Configuration ---
+# OSFD is a white-box attack that targets a single surrogate model.
+victims:
+  - name: "yolo12x"
+    type: "yolo"
+    path: "weights/YOLO/yolo12x.pt" # IMPORTANT: Make sure this path is correct
+    car_class_id: 2
+
+# --- Dataset Configuration ---
+dataset:
+  # Point to a different single image file
+  path: "assets/extracted_datasets/active_dataset/reference_gray/xref/loc0000.png" 
+  
+  # These should match the img_size in the attack params
+  height: 480
+  width: 640
+
+# --- Output & Training Configuration ---
+output_path: "results/osfd_single_image/perturbation.pt"
+clear_output_dir_on_start: true
+
+training:
+  epochs: 100
+  batch_size: 1
+  learning_rate: 0.001 # OSFD often benefits from a smaller learning rate
+  vis_every_n_epochs: 10

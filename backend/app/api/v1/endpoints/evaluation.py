@@ -494,34 +494,6 @@ async def delete_evaluation_item(
         )
 
 
-# ========== Class Metrics Endpoints ==========
-
-@router.get("/runs/{run_id}/class-metrics")
-async def get_evaluation_class_metrics(
-    run_id: UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Get per-class metrics for an evaluation run.
-
-    Returns metrics for each class including:
-    - AP metrics (map, map50, map75)
-    - Precision, Recall, F1
-    - Ground truth count and prediction count
-    """
-    # Check if evaluation run exists
-    eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
-    if not eval_run:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evaluation run not found",
-        )
-
-    # Per-class metrics are not calculated in the current implementation
-    # Return empty list for backward compatibility
-    return []
-
-
 # ========== Visualization Endpoints ==========
 
 def get_class_color(class_name: str) -> tuple:

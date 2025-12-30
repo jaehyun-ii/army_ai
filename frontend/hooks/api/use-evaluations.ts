@@ -49,6 +49,23 @@ export function usePRCurveData(runId: string, enabled = true) {
 }
 
 /**
+ * IoU Distribution 데이터 조회
+ */
+export function useIoUDistribution(runId: string, enabled = true) {
+  return useQuery({
+    queryKey: ['evaluations', runId, 'iou-distribution'],
+    queryFn: async () => {
+      const response = await fetch(`/api/evaluations/${runId}/iou-distribution`)
+      if (!response.ok) {
+        throw new Error('Failed to fetch IoU distribution')
+      }
+      return response.json()
+    },
+    enabled: enabled && !!runId,
+  })
+}
+
+/**
  * 평가 실행 생성
  */
 export function useCreateEvaluation() {

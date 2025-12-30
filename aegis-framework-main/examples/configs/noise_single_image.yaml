@@ -1,0 +1,47 @@
+attack_name: "Universal Noise Attack on a Single Image (vs YOLOv12x)"
+
+# --- Attack Configuration ---
+attack:
+  params:
+    type: "noise"  # Specifies the Universal2DAttack class
+
+    epsilon: 8 
+
+    
+    # The image size the noise perturbation will have and the size
+    # the input image will be resized to before the attack.
+    img_size: [480, 640]
+
+  loss_params:
+    # HyperLoss settings for a strong disappearance attack
+    iou_threshold: 0.1
+    top_k_boxes: -1
+    top_n_classes: 3
+    lambda_targeted: 1.0  # Set to 0 to only focus on making *any* detection disappear
+    lambda_agnostic: 2.0   # High value to strongly penalize any high-confidence detection
+
+# --- Victim Model Configuration ---
+victims:
+  - name: "yolo12x"
+    type: "yolo"
+    path: "weights/YOLO/yolo12x.pt" # IMPORTANT: Make sure this path is correct
+    car_class_id: 2
+
+# --- Dataset Configuration ---
+dataset:
+  # Point to a single image file. The framework will auto-generate the mask.
+  path: "assets/extracted_datasets/active_dataset/reference_gray/xref/loc0000.png" 
+  
+  # These should match the img_size in the attack params
+  height: 480
+  width: 640
+
+# --- Output & Training Configuration ---
+output_path: "results/universal_noise_single_image/perturbation.pt"
+clear_output_dir_on_start: true # Convenient for re-running tests
+
+training:
+  epochs: 100 # Training on one image is fast, so more epochs are fine
+  batch_size: 1
+  learning_rate: 0.01
+  vis_every_n_epochs: 10 # Visualize every 10 epochs

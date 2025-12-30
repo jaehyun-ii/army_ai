@@ -2,28 +2,170 @@
 Visualization-specific endpoints for evaluation data.
 Provides PR curves, IoU analysis, and other visualization data.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import numpy as np
+import logging
 
 from app.database import get_db
 from app.crud import evaluation as crud_evaluation
-from app.services.metrics_calculator import calculate_iou, BoundingBox
+from app.services.metrics_calculator import calculate_iou, BoundingBox, parse_detection_to_bbox
+from app.schemas.evaluation import EvalDatasetType
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+@router.get("/runs/{run_id}/iou-distribution")
+async def get_iou_distribution_data(
+    run_id: UUID,
+    dataset_type: Optional[str] = Query(None, description="Dataset type: 'base' or 'attack'"),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Get IoU distribution data for an evaluation run.
+
+    If stored distribution is available, returns it.
+    Otherwise, calculates it from eval_items on-the-fly.
+
+    Returns:
+    {
+        "base": {
+            "iou_histogram": {"bins": [...], "counts": [...]},
+            "iou_mean": 0.75,
+            "iou_median": 0.78,
+            ...
+        },
+        "attack": {...}
+    }
+    """
+    from app.ai.evaluates.metrics.iou_distribution import calculate_iou_distribution
+    from app.services.metrics_calculator import parse_detection_to_bbox
+
+    # Get evaluation run
+    eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
+    if not eval_run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found"
+        )
+
+    result_data = {}
+
+    # Get dataset results
+    dataset_results = await crud_evaluation.get_eval_dataset_results_by_run(db, run_id)
+
+    for dataset_result in dataset_results:
+        ds_type = dataset_result.dataset_type.value.lower()  # 'base' or 'attack'
+
+        # Filter by dataset_type if specified
+        if dataset_type and ds_type != dataset_type.lower():
+            continue
+
+        # Check if IoU distribution is already stored
+        if dataset_result.iou_distribution:
+            result_data[ds_type] = dataset_result.iou_distribution
+            logger.info(f"Using stored IoU distribution for {ds_type} dataset")
+        else:
+            # Calculate on-the-fly
+            logger.warning(f"No stored IoU distribution for {ds_type}, calculating from eval_items...")
+
+            items = await crud_evaluation.get_all_eval_items(
+                db, run_id=run_id, dataset_type=dataset_result.dataset_type
+            )
+
+            if items:
+                all_predictions = []
+                all_ground_truths = []
+
+                for item in items:
+                    image_id = str(item.image_2d_id or item.image_3d_id)
+
+                    # Parse predictions
+                    for pred in item.prediction or []:
+                        try:
+                            bbox = parse_detection_to_bbox(
+                                pred,
+                                image_id=image_id,
+                                image_width=640,
+                                image_height=640,
+                            )
+                            all_predictions.append(bbox)
+                        except Exception as e:
+                            logger.debug(f"Failed to parse prediction: {e}")
+
+                    # Parse ground truths
+                    for gt in item.ground_truth or []:
+                        try:
+                            gt_detection = {
+                                "bbox": gt.get("bbox", {}),
+                                "class_name": gt.get("class_name", "unknown"),
+                                "confidence": 1.0,
+                            }
+                            bbox = parse_detection_to_bbox(
+                                gt_detection,
+                                image_id=image_id,
+                                image_width=640,
+                                image_height=640,
+                            )
+                            all_ground_truths.append(bbox)
+                        except Exception as e:
+                            logger.debug(f"Failed to parse GT: {e}")
+
+                if all_predictions and all_ground_truths:
+                    iou_dist = calculate_iou_distribution(
+                        predictions=all_predictions,
+                        ground_truths=all_ground_truths,
+                        iou_threshold=0.5,
+                        num_bins=20,
+                    )
+                    result_data[ds_type] = iou_dist
+                else:
+                    result_data[ds_type] = None
+            else:
+                result_data[ds_type] = None
+
+    if not result_data:
+        return {"message": "No IoU distribution data available"}
+
+    return result_data
 
 
 @router.get("/runs/{run_id}/pr-curve-data")
 async def get_pr_curve_data(
     run_id: UUID,
+    dataset_type: Optional[str] = Query(None, description="Dataset type: 'base' or 'attack'"),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
-    Generate PR (Precision-Recall) curve data from evaluation items.
+    Get PR (Precision-Recall) curve data from stored evaluation results.
 
-    Returns actual precision and recall values at different confidence thresholds.
+    Returns PR curves for IoU 0.5, 0.75, 0.95 from eval_dataset_results.
+    Falls back to real-time calculation from eval_items if not available.
+
+    Query Parameters:
+    - dataset_type: Optional filter ('base' or 'attack'). If not provided, returns all available.
+
+    Response Format:
+    {
+        "base": {
+            "iou_0.50": {
+                "precisions": [1.0, 0.95, ...],
+                "recalls": [0.0, 0.02, ...],
+                "confidence_thresholds": [1.0, 0.99, ...],
+                "ap": 0.856
+            },
+            "iou_0.75": {...},
+            "iou_0.95": {...}
+        },
+        "attack": {
+            "iou_0.50": {...},
+            "iou_0.75": {...},
+            "iou_0.95": {...}
+        }
+    }
     """
     # Get evaluation run
     eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
@@ -33,83 +175,128 @@ async def get_pr_curve_data(
             detail="Evaluation run not found"
         )
 
-    # Get all evaluation items (predictions and ground truths)
-    items_result = await crud_evaluation.get_eval_items(db=db, run_id=run_id)
+    # Get dataset results with PR curves
+    result_data = {}
 
-    # Handle tuple return (items, total) or list return
-    if isinstance(items_result, tuple):
-        items, _ = items_result
+    # Determine which dataset types to fetch
+    if dataset_type:
+        try:
+            dataset_type_enum = EvalDatasetType(dataset_type.upper())
+            dataset_results = await crud_evaluation.get_eval_dataset_results_by_run(db, run_id)
+            dataset_results = [dr for dr in dataset_results if dr.dataset_type == dataset_type_enum]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid dataset_type: {dataset_type}. Must be 'base' or 'attack'."
+            )
     else:
-        items = items_result
+        # Fetch all dataset results for this run
+        dataset_results = await crud_evaluation.get_eval_dataset_results_by_run(db, run_id)
 
-    if not items:
+    # Process each dataset result
+    for dataset_result in dataset_results:
+        if not dataset_result:
+            continue
+
+        ds_type = dataset_result.dataset_type.value.lower()  # 'base' or 'attack'
+
+        # Check if PR curves are stored
+        if dataset_result.pr_curves and isinstance(dataset_result.pr_curves, dict):
+            # Use stored PR curves
+            result_data[ds_type] = dataset_result.pr_curves
+            logger.info(f"Using stored PR curves for {ds_type} dataset")
+        else:
+            # Fallback: Calculate PR curves from eval_items (backward compatibility)
+            logger.warning(f"No stored PR curves for {ds_type} dataset, calculating from eval_items...")
+
+            items = await crud_evaluation.get_all_eval_items(
+                db, run_id=run_id, dataset_type=dataset_result.dataset_type
+            )
+
+            if items:
+                pr_curves = _calculate_pr_curves_from_items(items)
+                result_data[ds_type] = pr_curves
+            else:
+                result_data[ds_type] = {
+                    "iou_0.50": {"precisions": [], "recalls": [], "confidence_thresholds": [], "ap": 0.0},
+                    "iou_0.75": {"precisions": [], "recalls": [], "confidence_thresholds": [], "ap": 0.0},
+                    "iou_0.95": {"precisions": [], "recalls": [], "confidence_thresholds": [], "ap": 0.0},
+                }
+
+    if not result_data:
         return {
-            "pr_curve": [],
-            "iou_thresholds": [],
-            "message": "No evaluation items found"
+            "message": "No PR curve data available",
+            "data": {}
         }
+
+    return result_data
+
+
+def _calculate_pr_curves_from_items(
+    eval_items: List[Any],
+    iou_thresholds: List[float] = None,
+) -> Dict[str, Any]:
+    """
+    Fallback function to calculate PR curves from eval_items.
+    Used when pr_curves are not stored in eval_dataset_results.
+    """
+    from app.services.metrics_calculator import calculate_pr_curves_multiple_ious
+
+    if iou_thresholds is None:
+        iou_thresholds = [0.5, 0.75, 0.95]
 
     # Collect all predictions and ground truths
     all_predictions = []
     all_ground_truths = []
 
-    for item in items:
-        # Ground truths
-        ground_truth = item.ground_truth if hasattr(item, 'ground_truth') else []
-        if ground_truth:
-            if isinstance(ground_truth, list):
-                for gt_box in ground_truth:
-                    if isinstance(gt_box, dict):
-                        all_ground_truths.append(BoundingBox(
-                            class_name=gt_box.get("class_name", "unknown"),
-                            x1=float(gt_box.get("x1", 0)),
-                            y1=float(gt_box.get("y1", 0)),
-                            x2=float(gt_box.get("x2", 0)),
-                            y2=float(gt_box.get("y2", 0)),
-                            confidence=1.0,
-                        ))
+    for item in eval_items:
+        image_id = str(item.image_2d_id or item.image_3d_id)
 
-        # Predictions
-        prediction = item.prediction if hasattr(item, 'prediction') else []
-        if prediction:
-            if isinstance(prediction, list):
-                for pred_box in prediction:
-                    if isinstance(pred_box, dict):
-                        all_predictions.append(BoundingBox(
-                            class_name=pred_box.get("class_name", "unknown"),
-                            x1=float(pred_box.get("x1", 0)),
-                            y1=float(pred_box.get("y1", 0)),
-                            x2=float(pred_box.get("x2", 0)),
-                            y2=float(pred_box.get("y2", 0)),
-                            confidence=float(pred_box.get("confidence", 0)),
-                        ))
+        # Parse predictions
+        for pred in item.prediction or []:
+            try:
+                bbox = parse_detection_to_bbox(
+                    pred,
+                    image_id=image_id,
+                    image_width=640,
+                    image_height=640,
+                )
+                all_predictions.append(bbox)
+            except Exception as e:
+                logger.debug(f"Failed to parse prediction: {e}")
+
+        # Parse ground truths
+        for gt in item.ground_truth or []:
+            try:
+                gt_detection = {
+                    "bbox": gt.get("bbox", {}),
+                    "class_name": gt.get("class_name", "unknown"),
+                    "confidence": 1.0,
+                }
+                bbox = parse_detection_to_bbox(
+                    gt_detection,
+                    image_id=image_id,
+                    image_width=640,
+                    image_height=640,
+                )
+                all_ground_truths.append(bbox)
+            except Exception as e:
+                logger.debug(f"Failed to parse GT: {e}")
 
     if not all_predictions or not all_ground_truths:
         return {
-            "pr_curve": [],
-            "iou_thresholds": [],
-            "message": "Insufficient data for PR curve"
+            "iou_0.50": {"precisions": [], "recalls": [], "confidence_thresholds": [], "ap": 0.0},
+            "iou_0.75": {"precisions": [], "recalls": [], "confidence_thresholds": [], "ap": 0.0},
+            "iou_0.95": {"precisions": [], "recalls": [], "confidence_thresholds": [], "ap": 0.0},
         }
 
-    # Sort predictions by confidence (descending)
-    all_predictions.sort(key=lambda x: x.confidence, reverse=True)
-
-    # Calculate PR curve at IoU threshold 0.5
-    iou_threshold = 0.5
-    pr_curve_data = calculate_pr_curve(all_predictions, all_ground_truths, iou_threshold)
-
-    # Calculate metrics at different IoU thresholds
-    iou_thresholds_data = calculate_iou_thresholds_metrics(
-        all_predictions,
-        all_ground_truths
+    # Calculate PR curves
+    return calculate_pr_curves_multiple_ious(
+        predictions=all_predictions,
+        ground_truths=all_ground_truths,
+        iou_thresholds=iou_thresholds,
+        num_points=101
     )
-
-    return {
-        "pr_curve": pr_curve_data,
-        "iou_thresholds": iou_thresholds_data,
-        "total_predictions": len(all_predictions),
-        "total_ground_truths": len(all_ground_truths),
-    }
 
 
 def calculate_pr_curve(

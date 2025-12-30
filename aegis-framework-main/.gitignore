@@ -1,0 +1,42 @@
+# Python temporary files and byte-compiled code
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Python virtual environment folders
+venv/
+env/
+.venv/
+
+# IDE and editor specific files
+.vscode/
+.idea/
+*.swp
+
+# Secrets and environment variables
+# NEVER commit these files!
+.env
+*.env
+credentials.json
+
+# Large data files
+*.csv
+*.xlsx
+*.parquet
+*.pkl
+results/
+weights/
+assets/
+*.pt
+*.zip
+
+# Build and distribution artifacts
+dist/
+build/
+*.egg-info/
+
+*.ipynb

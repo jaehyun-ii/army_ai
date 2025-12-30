@@ -44,6 +44,7 @@ class EvalDatasetResultBase(BaseModel):
     dataset_dimension: DatasetDimension
     metrics_summary: Optional[Dict[str, Any]] = Field(None, description="Overall metrics for this dataset")
     iou_distribution: Optional[Dict[str, Any]] = Field(None, description="IoU distribution statistics")
+    pr_curves: Optional[Dict[str, Any]] = Field(None, description="PR curves for IoU 0.5, 0.75, 0.95")
 
 
 class EvalDatasetResultCreate(EvalDatasetResultBase):
@@ -55,6 +56,7 @@ class EvalDatasetResultUpdate(BaseModel):
     """Schema for updating evaluation dataset result."""
     metrics_summary: Optional[Dict[str, Any]] = None
     iou_distribution: Optional[Dict[str, Any]] = None
+    pr_curves: Optional[Dict[str, Any]] = None
 
 
 class EvalDatasetResultResponse(EvalDatasetResultBase):

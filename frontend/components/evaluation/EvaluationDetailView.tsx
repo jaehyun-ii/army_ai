@@ -22,6 +22,9 @@ import {
 import { apiClient } from "@/lib/api-client"
 import { toast } from "sonner"
 import { EvaluationImageComparison } from "./EvaluationImageComparison"
+import { PRCurveChart } from "./pr-curve-chart"
+import { IoUDistributionChart } from "./iou-distribution-chart"
+import { usePRCurveData, useIoUDistribution } from "@/hooks/api"
 import {
   BarChart,
   Bar,
@@ -30,7 +33,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell,
+  Legend,
 } from "recharts"
 
 interface MetricsSummary {
@@ -115,6 +118,10 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
   const [baseDataset, setBaseDataset] = useState<Dataset | null>(null)
   const [attackDataset, setAttackDataset] = useState<Dataset | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // Fetch data using hooks
+  const prCurveQuery = usePRCurveData(runId, !!runId)
+  const iouDistQuery = useIoUDistribution(runId, !!runId)
 
   const sanitizeNumber = (value: any) => {
     const parsed = typeof value === "string" ? parseFloat(value) : value
@@ -293,8 +300,6 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
         }
       }
 
-      // Class metrics removed - not used
-      // loadClassMetrics()
     } catch (error) {
       console.error("Failed to load evaluation data:", error)
       toast.error("평가 데이터를 불러오는데 실패했습니다")
@@ -302,19 +307,6 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
       setLoading(false)
     }
   }
-
-  // Class metrics removed - not used
-  // const loadClassMetrics = async () => {
-  //   setLoadingClassMetrics(true)
-  //   try {
-  //     const response: any = await apiClient.getEvaluationClassMetrics(runId)
-  //     setClassMetrics(response.items || [])
-  //   } catch (error) {
-  //     console.error("Failed to load class metrics:", error)
-  //   } finally {
-  //     setLoadingClassMetrics(false)
-  //   }
-  // }
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -412,7 +404,7 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
           <div className="space-y-6">
             {/* Summary Cards */}
             <div className={`grid grid-cols-1 gap-4 ${
-              evaluationRun.phase === 'post_attack' ? 'md:grid-cols-5' : 'md:grid-cols-4'
+              evaluationRun.phase === 'post_attack' ? 'md:grid-cols-4' : 'md:grid-cols-3'
             }`}>
               <Card className="bg-surface-container/50 border-border">
                 <CardContent className="pt-6">
@@ -469,23 +461,6 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
                   </div>
                 </CardContent>
               </Card>
-              {headerMetrics && (
-                <Card className="bg-surface-container/50 border-border">
-                  <CardContent className="pt-6">
-                    <div className="flex items-center gap-3">
-                      <BarChart3 className="w-10 h-10 text-secondary" />
-                      <div>
-                        <p className="text-sm text-muted">
-                          {evaluationRun.params?.target_class ? `${evaluationRun.params.target_class} AP@50` : 'mAP@50'}
-                        </p>
-                        <p className="text-2xl font-bold text-secondary">
-                          {((headerMetrics.ap50 || headerMetrics.map50 || 0) * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
             </div>
 
             {/* Main Content Tabs */}
@@ -581,196 +556,244 @@ export function EvaluationDetailView({ runId, onBack }: EvaluationDetailViewProp
 
                   {/* 성능 지표 비교: 기준 vs 공격 */}
                   {evaluationRun.metrics_summary && (
-                    <Card className="bg-surface-container/50 border-border">
-                      <CardHeader>
-                        <CardTitle className="text-primary">주요 성능 지표</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className={`grid gap-6 ${evaluationRun.phase === 'post_attack' ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                          {/* 좌측: 기준 데이터셋 */}
-                          {(() => {
-                            const baseMetrics = getBaseDatasetMetrics()
-                            return (
-                          <div className="space-y-3">
-                            <div className="flex items-center gap-2 pb-2 border-b border-tertiary">
-                              <Database className="w-5 h-5 text-tertiary" />
-                              <h3 className="text-lg font-semibold text-tertiary">기준 데이터셋</h3>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div className="bg-surface-container rounded p-3">
-                                <p className="text-xs text-muted mb-1">F1 Score</p>
-                                <p className="text-xl font-bold text-tertiary">
-                                  {((baseMetrics?.f1 || 0) * 100).toFixed(2)}%
-                                </p>
+                    <div className="space-y-6">
+                      {/* 성능 지표 카드 */}
+                      <Card className="bg-surface-container/50 border-border">
+                        <CardHeader>
+                          <CardTitle className="text-primary">주요 성능 지표</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className={`grid gap-6 ${evaluationRun.phase === 'post_attack' ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
+                            {/* 기준 데이터셋 */}
+                            <div className="space-y-4">
+                              <div className="flex items-center gap-2 pb-3 border-b-2 border-tertiary">
+                                <Database className="w-5 h-5 text-tertiary" />
+                                <h3 className="text-lg font-semibold text-tertiary">기준 데이터셋</h3>
                               </div>
-                              <div className="bg-surface-container rounded p-3">
-                                <p className="text-xs text-muted mb-1">
-                                  {evaluationRun.params?.target_class ? `${evaluationRun.params.target_class} AP@50` : 'mAP@50'}
-                                </p>
-                                <p className="text-xl font-bold text-secondary">
-                                  {((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100).toFixed(2)}%
-                                </p>
-                              </div>
-                              <div className="bg-surface-container rounded p-3">
-                                <p className="text-xs text-muted mb-1">Precision</p>
-                                <p className="text-xl font-bold text-tertiary">
-                                  {((baseMetrics?.precision || 0) * 100).toFixed(2)}%
-                                </p>
-                              </div>
-                              <div className="bg-surface-container rounded p-3">
-                                <p className="text-xs text-muted mb-1">Recall</p>
-                                <p className="text-xl font-bold text-tertiary">
-                                  {((baseMetrics?.recall || 0) * 100).toFixed(2)}%
-                                </p>
+                              <div className="grid grid-cols-3 gap-4">
+                                {/* 첫 번째 행: F1 Score, Precision, Recall */}
+                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-tertiary transition-colors">
+                                  <p className="text-xs text-muted mb-2">F1 Score</p>
+                                  <p className="text-2xl font-bold text-tertiary">
+                                    {((baseMetrics?.f1 || 0) * 100).toFixed(2)}%
+                                  </p>
+                                </div>
+                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-tertiary transition-colors">
+                                  <p className="text-xs text-muted mb-2">Precision</p>
+                                  <p className="text-2xl font-bold text-tertiary">
+                                    {((baseMetrics?.precision || 0) * 100).toFixed(2)}%
+                                  </p>
+                                </div>
+                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-tertiary transition-colors">
+                                  <p className="text-xs text-muted mb-2">Recall</p>
+                                  <p className="text-2xl font-bold text-tertiary">
+                                    {((baseMetrics?.recall || 0) * 100).toFixed(2)}%
+                                  </p>
+                                </div>
+                                {/* 두 번째 행: AP@50, AP@75, AP@50:95 */}
+                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-2">
+                                    {evaluationRun.params?.target_class ? `AP@50` : 'mAP@50'}
+                                  </p>
+                                  <p className="text-2xl font-bold text-secondary">
+                                    {((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100).toFixed(2)}%
+                                  </p>
+                                </div>
+                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-2">
+                                    {evaluationRun.params?.target_class ? `AP@75` : 'mAP@75'}
+                                  </p>
+                                  <p className="text-2xl font-bold text-secondary">
+                                    {((baseMetrics?.ap75 || baseMetrics?.map75 || 0) * 100).toFixed(2)}%
+                                  </p>
+                                </div>
+                                <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
+                                  <p className="text-xs text-muted mb-2">
+                                    {evaluationRun.params?.target_class ? `AP@50:95` : 'mAP@50:95'}
+                                  </p>
+                                  <p className="text-2xl font-bold text-secondary">
+                                    {((baseMetrics?.ap || baseMetrics?.map || 0) * 100).toFixed(2)}%
+                                  </p>
+                                </div>
                               </div>
                             </div>
 
-                            {/* Overall Performance Metrics Chart - 기준 */}
-                            <div className="mt-4">
-                              <ResponsiveContainer width="100%" height={250}>
-                                <BarChart
-                                  data={(() => {
-                                    const targetClass = evaluationRun.params?.target_class;
-                                    const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                    const apMetricValue = ((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100);
-                                    return [
-                                      { metric: "F1 Score", value: ((baseMetrics?.f1 || 0) * 100), color: "#f97316" },
-                                      { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                      { metric: "Precision", value: ((baseMetrics?.precision || 0) * 100), color: "var(--color-success)" },
-                                      { metric: "Recall", value: ((baseMetrics?.recall || 0) * 100), color: "var(--color-warning)" },
-                                    ];
-                                  })()}
-                                  margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                                >
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                  <XAxis dataKey="metric" stroke="#94a3b8" />
-                                  <YAxis stroke="#94a3b8" domain={[0, 100]} />
-                                  <Tooltip
-                                    contentStyle={{
-                                      backgroundColor: '#1e293b',
-                                      border: '1px solid #334155',
-                                      borderRadius: '8px',
-                                      color: '#fff',
-                                    }}
-                                    formatter={(value: number) => `${value.toFixed(2)}%`}
-                                  />
-                                  <Bar dataKey="value" radius={[8, 8, 0, 0]}>
-                                    {(() => {
-                                      const targetClass = evaluationRun.params?.target_class;
-                                      const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                      const apMetricValue = ((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100);
-                                      return [
-                                        { metric: "F1 Score", value: ((baseMetrics?.f1 || 0) * 100), color: "#f97316" },
-                                        { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                        { metric: "Precision", value: ((baseMetrics?.precision || 0) * 100), color: "var(--color-success)" },
-                                        { metric: "Recall", value: ((baseMetrics?.recall || 0) * 100), color: "var(--color-warning)" },
-                                      ].map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={entry.color} />
-                                      ));
-                                    })()}
-                                  </Bar>
-                                </BarChart>
-                              </ResponsiveContainer>
-                            </div>
+                            {/* 공격 데이터셋 (post_attack만) */}
+                            {evaluationRun.phase === 'post_attack' && (
+                              <div className="space-y-4">
+                                <div className="flex items-center gap-2 pb-3 border-b-2 border-error">
+                                  <Images className="w-5 h-5 text-error" />
+                                  <h3 className="text-lg font-semibold text-error">공격 데이터셋</h3>
+                                </div>
+                                <div className="grid grid-cols-3 gap-4">
+                                  {/* 첫 번째 행: F1 Score, Precision, Recall */}
+                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-error transition-colors">
+                                    <p className="text-xs text-muted mb-2">F1 Score</p>
+                                    <p className="text-2xl font-bold text-tertiary">
+                                      {((attackMetrics?.f1 || 0) * 100).toFixed(2)}%
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-error transition-colors">
+                                    <p className="text-xs text-muted mb-2">Precision</p>
+                                    <p className="text-2xl font-bold text-tertiary">
+                                      {((attackMetrics?.precision || 0) * 100).toFixed(2)}%
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-error transition-colors">
+                                    <p className="text-xs text-muted mb-2">Recall</p>
+                                    <p className="text-2xl font-bold text-tertiary">
+                                      {((attackMetrics?.recall || 0) * 100).toFixed(2)}%
+                                    </p>
+                                  </div>
+                                  {/* 두 번째 행: AP@50, AP@75, AP@50:95 */}
+                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-2">
+                                      {evaluationRun.params?.target_class ? `AP@50` : 'mAP@50'}
+                                    </p>
+                                    <p className="text-2xl font-bold text-secondary">
+                                      {((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100).toFixed(2)}%
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-2">
+                                      {evaluationRun.params?.target_class ? `AP@75` : 'mAP@75'}
+                                    </p>
+                                    <p className="text-2xl font-bold text-secondary">
+                                      {((attackMetrics?.ap75 || attackMetrics?.map75 || 0) * 100).toFixed(2)}%
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container rounded-lg p-4 border border-border hover:border-secondary transition-colors">
+                                    <p className="text-xs text-muted mb-2">
+                                      {evaluationRun.params?.target_class ? `AP@50:95` : 'mAP@50:95'}
+                                    </p>
+                                    <p className="text-2xl font-bold text-secondary">
+                                      {((attackMetrics?.ap || attackMetrics?.map || 0) * 100).toFixed(2)}%
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          )
-                          })()}
+                        </CardContent>
+                      </Card>
 
-                          {/* 우측: 공격 데이터셋 (post_attack만) */}
-                          {evaluationRun.phase === 'post_attack' && (() => {
-                            const attackMetrics = getAttackDatasetMetrics()
-                            return (
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-2 pb-2 border-b border-error">
-                                <Images className="w-5 h-5 text-error" />
-                                <h3 className="text-lg font-semibold text-error">공격 데이터셋</h3>
-                              </div>
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="bg-surface-container rounded p-3">
-                                  <p className="text-xs text-muted mb-1">F1 Score</p>
-                                  <p className="text-xl font-bold text-tertiary">
-                                    {((attackMetrics?.f1 || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                                <div className="bg-surface-container rounded p-3">
-                                  <p className="text-xs text-muted mb-1">{evaluationRun.params?.target_class ? `${evaluationRun.params.target_class} AP@50` : "mAP@50"}</p>
-                                  <p className="text-xl font-bold text-secondary">
-                                    {((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                                <div className="bg-surface-container rounded p-3">
-                                  <p className="text-xs text-muted mb-1">Precision</p>
-                                  <p className="text-xl font-bold text-tertiary">
-                                    {((attackMetrics?.precision || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                                <div className="bg-surface-container rounded p-3">
-                                  <p className="text-xs text-muted mb-1">Recall</p>
-                                  <p className="text-xl font-bold text-tertiary">
-                                    {((attackMetrics?.recall || 0) * 100).toFixed(2)}%
-                                  </p>
-                                </div>
-                              </div>
+                      {/* 성능 비교 차트 */}
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* Bar Chart - Base vs Attack */}
+                        <Card className="bg-surface-container/50 border-border">
+                          <CardHeader>
+                            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted">
+                              <BarChart3 className="w-4 h-4" />
+                              성능 지표 비교
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <ResponsiveContainer width="100%" height={350}>
+                              <BarChart
+                                data={(() => {
+                                  const targetClass = evaluationRun.params?.target_class;
+                                  const ap50Label = targetClass ? `AP@50` : "mAP@50";
+                                  const ap75Label = targetClass ? `AP@75` : "mAP@75";
+                                  const apLabel = targetClass ? `AP@50:95` : "mAP@50:95";
 
-                              {/* Overall Performance Metrics Chart - 공격 */}
-                              <div className="mt-4">
-                                <ResponsiveContainer width="100%" height={250}>
-                                  <BarChart
-                                    data={(() => {
-                                      const targetClass = evaluationRun.params?.target_class;
-                                      const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                      const apMetricValue = ((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100);
-                                      const f1 = (attackMetrics?.f1 || 0) * 100;
-                                      const precision = (attackMetrics?.precision || 0) * 100;
-                                      const recall = (attackMetrics?.recall || 0) * 100;
-                                      return [
-                                        { metric: "F1 Score", value: f1, color: "#f97316" },
-                                        { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                        { metric: "Precision", value: precision, color: "var(--color-success)" },
-                                        { metric: "Recall", value: recall, color: "var(--color-warning)" },
-                                      ];
-                                    })()}
-                                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                                  >
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                    <XAxis dataKey="metric" stroke="#94a3b8" />
-                                    <YAxis stroke="#94a3b8" domain={[0, 100]} />
-                                    <Tooltip
-                                      contentStyle={{
-                                        backgroundColor: '#1e293b',
-                                        border: '1px solid #334155',
-                                        borderRadius: '8px',
-                                        color: '#fff',
-                                      }}
-                                      formatter={(value: number) => `${value.toFixed(2)}%`}
-                                    />
-                                    <Bar dataKey="value" radius={[8, 8, 0, 0]}>
-                                      {(() => {
-                                        const targetClass = evaluationRun.params?.target_class;
-                                        const apMetricLabel = targetClass ? targetClass + " AP@50" : "mAP@50";
-                                        const apMetricValue = ((attackMetrics?.ap50 || attackMetrics?.map50 || 0) * 100);
-                                        const f1 = (attackMetrics?.f1 || 0) * 100;
-                                        const precision = (attackMetrics?.precision || 0) * 100;
-                                        const recall = (attackMetrics?.recall || 0) * 100;
-                                        return [
-                                          { metric: "F1 Score", value: f1, color: "#f97316" },
-                                          { metric: apMetricLabel, value: apMetricValue, color: "#8b5cf6" },
-                                          { metric: "Precision", value: precision, color: "var(--color-success)" },
-                                          { metric: "Recall", value: recall, color: "var(--color-warning)" },
-                                        ].map((entry, index) => (
-                                          <Cell key={`cell-attack-${index}`} fill={entry.color} />
-                                        ));
-                                      })()}
-                                    </Bar>
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              </div>
-                            </div>
-                            )
-                          })()}
-                        </div>
-                      </CardContent>
-                    </Card>
+                                  const baseData = {
+                                    f1: ((baseMetrics?.f1 || 0) * 100),
+                                    ap50: ((baseMetrics?.ap50 || baseMetrics?.map50 || 0) * 100),
+                                    ap75: ((baseMetrics?.ap75 || baseMetrics?.map75 || 0) * 100),
+                                    ap: ((baseMetrics?.ap || baseMetrics?.map || 0) * 100),
+                                    precision: ((baseMetrics?.precision || 0) * 100),
+                                    recall: ((baseMetrics?.recall || 0) * 100),
+                                  };
+
+                                  const attackData = evaluationRun.phase === 'post_attack' && attackMetrics ? {
+                                    f1: ((attackMetrics.f1 || 0) * 100),
+                                    ap50: ((attackMetrics.ap50 || attackMetrics.map50 || 0) * 100),
+                                    ap75: ((attackMetrics.ap75 || attackMetrics.map75 || 0) * 100),
+                                    ap: ((attackMetrics.ap || attackMetrics.map || 0) * 100),
+                                    precision: ((attackMetrics.precision || 0) * 100),
+                                    recall: ((attackMetrics.recall || 0) * 100),
+                                  } : null;
+
+                                  return [
+                                    {
+                                      metric: ap50Label,
+                                      base: baseData.ap50,
+                                      attack: attackData?.ap50
+                                    },
+                                    {
+                                      metric: ap75Label,
+                                      base: baseData.ap75,
+                                      attack: attackData?.ap75
+                                    },
+                                    {
+                                      metric: apLabel,
+                                      base: baseData.ap,
+                                      attack: attackData?.ap
+                                    },
+                                    {
+                                      metric: "F1 Score",
+                                      base: baseData.f1,
+                                      attack: attackData?.f1
+                                    },
+                                    {
+                                      metric: "Precision",
+                                      base: baseData.precision,
+                                      attack: attackData?.precision
+                                    },
+                                    {
+                                      metric: "Recall",
+                                      base: baseData.recall,
+                                      attack: attackData?.recall
+                                    },
+                                  ];
+                                })()}
+                                margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                <XAxis dataKey="metric" stroke="#94a3b8" />
+                                <YAxis stroke="#94a3b8" domain={[0, 100]} />
+                                <Tooltip
+                                  contentStyle={{
+                                    backgroundColor: '#1e293b',
+                                    border: '1px solid #334155',
+                                    borderRadius: '8px',
+                                    color: '#fff',
+                                  }}
+                                  formatter={(value: number) => `${value.toFixed(2)}%`}
+                                />
+                                <Legend
+                                  wrapperStyle={{ fontSize: 12 }}
+                                  formatter={(value) => {
+                                    if (value === "base") return "기준 데이터"
+                                    if (value === "attack") return "공격 데이터"
+                                    return value
+                                  }}
+                                />
+                                <Bar dataKey="base" fill="#3b82f6" radius={[8, 8, 0, 0]} name="base" />
+                                {evaluationRun.phase === 'post_attack' && (
+                                  <Bar dataKey="attack" fill="#ef4444" radius={[8, 8, 0, 0]} name="attack" />
+                                )}
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </CardContent>
+                        </Card>
+
+                        {/* PR Curve Chart */}
+                        <PRCurveChart
+                          data={prCurveQuery.data}
+                          isLoading={prCurveQuery.isLoading}
+                          showAttackCurve={evaluationRun.phase === 'post_attack'}
+                        />
+
+                        {/* IoU Distribution Chart */}
+                        <IoUDistributionChart
+                          baseDistribution={iouDistQuery.data?.base || null}
+                          attackDistribution={iouDistQuery.data?.attack || null}
+                          isLoading={iouDistQuery.isLoading}
+                          showAttackData={evaluationRun.phase === 'post_attack'}
+                        />
+                      </div>
+                    </div>
                   )}
               </TabsContent>
 

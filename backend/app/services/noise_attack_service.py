@@ -107,7 +107,7 @@ def get_noise_attack_config(attack_method: str, iterations: int, epsilon: float)
         },
         "universal_noise": {
             # Universal Noise: 범용 perturbation 학습
-            "alpha": epsilon / 10,  # epsilon의 1/10로 세밀한 조정
+            "alpha": epsilon / 10,  # epsilon의 1/10 (OSFD와 동일)
             "scheduler_type": "cosine",
             "scheduler_params": {
                 "T_max": iterations,
@@ -364,6 +364,28 @@ class NoiseAttackService:
                 scheduler_type = attack_config.get("scheduler_type", "constant")
                 scheduler_params = attack_config.get("scheduler_params", {})
 
+                # Store the main event loop reference
+                import asyncio
+                main_loop = asyncio.get_event_loop()
+
+                # Define progress callback for SSE updates
+                def training_progress_callback(current_iter: int, total_iter: int, loss_value: float, current_lr: float):
+                    """Callback to send training progress via SSE (called from training thread)"""
+                    try:
+                        # Schedule coroutine in main event loop from worker thread
+                        asyncio.run_coroutine_threadsafe(
+                            sse_logger.progress(
+                                f"Universal Noise 학습 중... ({current_iter}/{total_iter}) LR: {current_lr:.6f}",
+                                processed=current_iter,
+                                total=total_iter,
+                                successful=current_iter,
+                                failed=0
+                            ),
+                            main_loop
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send training progress via SSE: {e}")
+
                 attack = UniversalNoiseAttackPyTorch(
                     estimator=estimator,
                     eps=eps_normalized / 255.0,
@@ -375,6 +397,7 @@ class NoiseAttackService:
                     verbose=True,
                     scheduler_type=scheduler_type,  # Auto-configured scheduler
                     scheduler_params=scheduler_params,
+                    progress_callback=training_progress_callback,  # Send progress via SSE
                 )
                 await sse_logger.info(
                     f"Universal Noise Attack 생성 (PyTorch): epsilon={epsilon}, "
@@ -394,6 +417,28 @@ class NoiseAttackService:
                 scheduler_type = attack_config.get("scheduler_type", "constant")
                 scheduler_params = attack_config.get("scheduler_params", {})
 
+                # Store the main event loop reference
+                import asyncio
+                main_loop = asyncio.get_event_loop()
+
+                # Define progress callback for SSE updates
+                def training_progress_callback(current_iter: int, total_iter: int, loss_value: float, current_lr: float):
+                    """Callback to send training progress via SSE (called from training thread)"""
+                    try:
+                        # Schedule coroutine in main event loop from worker thread
+                        asyncio.run_coroutine_threadsafe(
+                            sse_logger.progress(
+                                f"OSFD 학습 중... ({current_iter}/{total_iter}) Loss: {loss_value:.2f}, LR: {current_lr:.6f}",
+                                processed=current_iter,
+                                total=total_iter,
+                                successful=current_iter,
+                                failed=0
+                            ),
+                            main_loop
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send training progress via SSE: {e}")
+
                 attack = NoiseOSFDPyTorch(
                     estimator=estimator,
                     eps=eps_normalized / 255.0,
@@ -406,6 +451,7 @@ class NoiseAttackService:
                     verbose=True,
                     lr_scheduler_type=scheduler_type,  # Auto-configured scheduler
                     lr_scheduler_params=scheduler_params,
+                    progress_callback=training_progress_callback,  # Send progress via SSE
                 )
                 await sse_logger.info(
                     f"Noise OSFD Attack 생성 (PyTorch): epsilon={epsilon}, "

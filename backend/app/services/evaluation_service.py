@@ -158,13 +158,40 @@ class EvaluationService:
 
             await eval_logger.success("평가 완료!")
 
+            # Generate PDF report (for all evaluations)
+            report_path = None
+            try:
+                    await eval_logger.status("PDF 보고서 생성 중...")
+                    from app.services.report_generation_service import report_generation_service
+
+                    # Check dependencies
+                    deps = report_generation_service.check_dependencies()
+                    if deps.get("weasyprint"):
+                        report_path = await report_generation_service.generate_evaluation_report(
+                            db=db,
+                            evaluation_id=eval_run_id,
+                            include_charts=deps.get("matplotlib", False)
+                        )
+                        await eval_logger.success(f"보고서 생성 완료: {report_path}")
+                        logger.info(f"PDF 보고서 생성 완료: {report_path}")
+                    else:
+                        await eval_logger.warning("WeasyPrint 미설치로 보고서 생성 건너뜀")
+                        logger.warning("WeasyPrint not available, skipping report generation")
+            except Exception as e:
+                # 보고서 생성 실패는 평가 전체를 실패시키지 않음
+                await eval_logger.warning(f"보고서 생성 실패: {str(e)}")
+                logger.error(f"Report generation failed for evaluation {eval_run_id}: {e}", exc_info=True)
+
             if session_id:
-                await self.sse_manager.send_event(session_id, {
+                event_data = {
                     "type": "complete",
                     "message": "평가 완료",
                     "eval_run_id": str(eval_run_id),
                     "timestamp": datetime.now().isoformat()
-                })
+                }
+                if report_path:
+                    event_data["report_path"] = report_path
+                await self.sse_manager.send_event(session_id, event_data)
 
         except Exception as e:
             logger.error(f"Evaluation {eval_run_id} failed: {e}", exc_info=True)
@@ -976,6 +1003,22 @@ class EvaluationService:
                    f"mAP@0.5={overall_metrics.get('map50', 0.0):.4f}, "
                    f"{len(per_class_metrics)} classes evaluated")
 
+        # Calculate PR curves for IoU 0.5, 0.75, 0.95
+        from app.services.metrics_calculator import calculate_pr_curves_multiple_ious
+
+        logger.info("📈 Calculating PR curves for IoU thresholds: 0.5, 0.75, 0.95...")
+        pr_curves = calculate_pr_curves_multiple_ious(
+            predictions=all_predictions,
+            ground_truths=all_ground_truths,
+            iou_thresholds=[0.5, 0.75, 0.95],
+            num_points=101
+        )
+
+        logger.info(f"✅ PR curves calculated: "
+                   f"IoU 0.5 AP={pr_curves['iou_0.50']['ap']:.4f}, "
+                   f"IoU 0.75 AP={pr_curves['iou_0.75']['ap']:.4f}, "
+                   f"IoU 0.95 AP={pr_curves['iou_0.95']['ap']:.4f}")
+
         # Rename metrics based on target class setting
         if target_class:
             # Single class evaluation: use "ap" instead of "map"
@@ -997,6 +1040,7 @@ class EvaluationService:
                 },
                 'per_class': per_class_metrics,
                 'iou_distribution': iou_distribution,
+                'pr_curves': pr_curves,  # NEW: PR curves for IoU 0.5, 0.75, 0.95
             }
             logger.info(f"🎯 Converted overall keys: {list(result['overall'].keys())}")
             logger.info(f"🎯 ap={result['overall']['ap']:.4f}, ap50={result['overall']['ap50']:.4f}")
@@ -1008,6 +1052,7 @@ class EvaluationService:
                 'overall': overall_metrics,
                 'per_class': per_class_metrics,
                 'iou_distribution': iou_distribution,
+                'pr_curves': pr_curves,  # NEW: PR curves for IoU 0.5, 0.75, 0.95
             }
 
     async def _save_evaluation_results(
@@ -1065,6 +1110,7 @@ class EvaluationService:
         dataset_metrics_summary = metrics.get('overall', {})
 
         dataset_iou_distribution = metrics.get('iou_distribution')
+        dataset_pr_curves = metrics.get('pr_curves')  # NEW: PR curves for IoU 0.5, 0.75, 0.95
 
         # Create eval_dataset_result
         dataset_result_create = EvalDatasetResultCreate(
@@ -1074,12 +1120,13 @@ class EvaluationService:
             dataset_dimension=dimension_enum,
             metrics_summary=dataset_metrics_summary,
             iou_distribution=dataset_iou_distribution,
+            pr_curves=dataset_pr_curves,  # NEW: Store PR curves
         )
 
         dataset_result = await crud.evaluation.create_eval_dataset_result(db, dataset_result_create)
         eval_dataset_result_id = dataset_result.id
 
-        logger.info(f"✅ Created eval_dataset_result: {eval_dataset_result_id} (type={dataset_type}, dataset_id={dataset_id})")
+        logger.info(f"✅ Created eval_dataset_result with PR curves: {eval_dataset_result_id} (type={dataset_type}, dataset_id={dataset_id})")
 
         # Save evaluation items
         for result in inference_results:

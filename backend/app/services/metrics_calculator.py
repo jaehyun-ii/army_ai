@@ -254,6 +254,151 @@ def calculate_ap_ar_all_ious(
     }
 
 
+def calculate_pr_curve_at_iou(
+    predictions: List[BoundingBox],
+    ground_truths: List[BoundingBox],
+    iou_threshold: float,
+    num_points: int = 101,
+) -> Dict[str, Any]:
+    """
+    Calculate full Precision-Recall curve at a specific IoU threshold.
+
+    Args:
+        predictions: List of predicted boxes (will be sorted by confidence)
+        ground_truths: List of ground truth boxes
+        iou_threshold: IoU threshold for matching
+        num_points: Number of points in PR curve (default: 101 for 0.00 to 1.00)
+
+    Returns:
+        Dictionary containing:
+        - precisions: List of precision values
+        - recalls: List of recall values
+        - confidence_thresholds: List of confidence thresholds
+        - ap: Average Precision (area under PR curve)
+    """
+    if len(ground_truths) == 0:
+        return {
+            "precisions": [],
+            "recalls": [],
+            "confidence_thresholds": [],
+            "ap": 0.0
+        }
+
+    if len(predictions) == 0:
+        return {
+            "precisions": [],
+            "recalls": [],
+            "confidence_thresholds": [],
+            "ap": 0.0
+        }
+
+    # Sort predictions by confidence (descending)
+    predictions = sorted(predictions, key=lambda x: x.confidence, reverse=True)
+
+    # Get confidence thresholds (from 1.0 to 0.0)
+    confidence_thresholds = np.linspace(1.0, 0.0, num_points)
+
+    precisions_list = []
+    recalls_list = []
+
+    for conf_threshold in confidence_thresholds:
+        # Filter predictions by confidence threshold
+        filtered_preds = [p for p in predictions if p.confidence >= conf_threshold]
+
+        if not filtered_preds:
+            # No predictions at this threshold
+            precisions_list.append(0.0 if conf_threshold < 1.0 else 1.0)
+            recalls_list.append(0.0)
+            continue
+
+        # Calculate TP, FP at this threshold
+        gt_matched = [False] * len(ground_truths)
+        tp_count = 0
+        fp_count = 0
+
+        for pred in filtered_preds:
+            # Find best matching ground truth
+            best_iou = 0.0
+            best_gt_idx = -1
+
+            for gt_idx, gt in enumerate(ground_truths):
+                if gt.class_name != pred.class_name or gt.image_id != pred.image_id:
+                    continue
+                if gt_matched[gt_idx]:
+                    continue
+
+                iou = calculate_iou(pred, gt)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_gt_idx = gt_idx
+
+            # Match if IoU exceeds threshold
+            if best_iou >= iou_threshold and best_gt_idx >= 0:
+                tp_count += 1
+                gt_matched[best_gt_idx] = True
+            else:
+                fp_count += 1
+
+        # Calculate precision and recall
+        precision = tp_count / (tp_count + fp_count) if (tp_count + fp_count) > 0 else 0.0
+        recall = tp_count / len(ground_truths) if len(ground_truths) > 0 else 0.0
+
+        precisions_list.append(precision)
+        recalls_list.append(recall)
+
+    # Calculate AP using interpolation
+    precisions_array = np.array(precisions_list)
+    recalls_array = np.array(recalls_list)
+    ap = calculate_interpolated_ap(precisions_array, recalls_array)
+
+    return {
+        "precisions": precisions_list,
+        "recalls": recalls_list,
+        "confidence_thresholds": confidence_thresholds.tolist(),
+        "ap": float(ap)
+    }
+
+
+def calculate_pr_curves_multiple_ious(
+    predictions: List[BoundingBox],
+    ground_truths: List[BoundingBox],
+    iou_thresholds: List[float] = None,
+    num_points: int = 101,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculate PR curves for multiple IoU thresholds.
+
+    Args:
+        predictions: List of predicted boxes
+        ground_truths: List of ground truth boxes
+        iou_thresholds: List of IoU thresholds to calculate PR curves for (default: [0.5, 0.75, 0.95])
+        num_points: Number of points in each PR curve
+
+    Returns:
+        Dictionary mapping IoU threshold to PR curve data:
+        {
+            "iou_0.50": {"precisions": [...], "recalls": [...], "confidence_thresholds": [...], "ap": 0.85},
+            "iou_0.75": {...},
+            "iou_0.95": {...}
+        }
+    """
+    if iou_thresholds is None:
+        iou_thresholds = [0.5, 0.75, 0.95]
+
+    pr_curves = {}
+
+    for iou_thresh in iou_thresholds:
+        key = f"iou_{iou_thresh:.2f}"
+        pr_curves[key] = calculate_pr_curve_at_iou(
+            predictions=predictions,
+            ground_truths=ground_truths,
+            iou_threshold=iou_thresh,
+            num_points=num_points
+        )
+
+    return pr_curves
+
+
 def calculate_ap_ar_by_size(
     predictions: List[BoundingBox],
     ground_truths: List[BoundingBox],

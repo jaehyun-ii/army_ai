@@ -581,6 +581,7 @@ CREATE TABLE eval_dataset_results (
   -- Metrics for this specific dataset
   metrics_summary jsonb,  -- Overall metrics for this dataset (map, map50, precision, recall, f1, etc.)
   iou_distribution jsonb,  -- IoU distribution statistics for this dataset
+  pr_curves jsonb,  -- PR curves for IoU 0.5, 0.75, 0.95
 
   -- Timestamps
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -589,7 +590,8 @@ CREATE TABLE eval_dataset_results (
 
   -- Constraints
   CONSTRAINT chk_eval_dataset_metrics CHECK (metrics_summary IS NULL OR jsonb_typeof(metrics_summary) = 'object'),
-  CONSTRAINT chk_eval_dataset_iou CHECK (iou_distribution IS NULL OR jsonb_typeof(iou_distribution) = 'object')
+  CONSTRAINT chk_eval_dataset_iou CHECK (iou_distribution IS NULL OR jsonb_typeof(iou_distribution) = 'object'),
+  CONSTRAINT chk_eval_dataset_pr_curves CHECK (pr_curves IS NULL OR jsonb_typeof(pr_curves) = 'object')
 );
 
 -- Indexes for efficient queries
@@ -610,6 +612,7 @@ COMMENT ON COLUMN eval_dataset_results.dataset_id IS 'Unified dataset ID (can re
 COMMENT ON COLUMN eval_dataset_results.dataset_dimension IS 'Dataset dimension: ''2d'' or ''3d''';
 COMMENT ON COLUMN eval_dataset_results.metrics_summary IS 'Overall metrics for this specific dataset (map, map50, map75, precision, recall, f1, etc.)';
 COMMENT ON COLUMN eval_dataset_results.iou_distribution IS 'IoU distribution statistics (histogram, mean, median, etc.) for this dataset';
+COMMENT ON COLUMN eval_dataset_results.pr_curves IS 'PR curves for IoU thresholds 0.5, 0.75, 0.95 (precisions, recalls, confidence_thresholds, ap)';
 
 CREATE TABLE eval_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

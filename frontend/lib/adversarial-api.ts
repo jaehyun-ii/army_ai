@@ -361,9 +361,11 @@ export async function startAdversarialDataGeneration(config: AdversarialDataConf
         attack_method: config.noise_method || "pgd", // or "fgsm"
         base_dataset_id: config.source_dataset_id,
         model_id: config.model_id,
-        epsilon: config.noise_epsilon || 8.0,
-        alpha: config.noise_alpha || 2.0,
-        iterations: config.noise_iterations || 10,
+        intensity_level: config.intensity_level,  // Use intensity_level for auto-configuration
+        // Only send manual parameters if intensity_level is not provided
+        epsilon: config.intensity_level ? undefined : (config.noise_epsilon || 8.0),
+        alpha: config.intensity_level ? undefined : (config.noise_alpha || 2.0),
+        iterations: config.intensity_level ? undefined : (config.noise_iterations || 10),
         target_class: config.target_class,  // Added: target class for attack
         session_id: config.session_id  // Added for SSE support
       }

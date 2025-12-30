@@ -11,7 +11,7 @@ External interface remains NumPy-based for ART compatibility.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 import torch
@@ -193,6 +193,7 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         verbose: bool = True,
         scheduler_type: str = "constant",
         scheduler_params: dict | None = None,
+        progress_callback: Optional[Callable[[int, int, float, float], None]] = None,
     ):
         """
         Create a UniversalNoiseAttackPyTorch attack instance.
@@ -225,6 +226,7 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         self.apply_mask = apply_mask
         self.target_class_id = target_class_id
         self.verbose = verbose
+        self.progress_callback = progress_callback
         # Always clamp to detector scale; default to 0-255 if estimator does not define clip values
         self.clip_min, self.clip_max = self._get_clip_bounds()
         self._check_params()
@@ -449,37 +451,65 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                 if not self.estimator.channels_first and grad_torch_valid.ndim == 4:
                     grad_torch_valid = grad_torch_valid.permute(0, 3, 1, 2)
 
-                # Normalize gradients back to [0, 1] space (our internal optimization space)
-                # The gradient from the estimator is already scaled. No further normalization is needed here.
-                # if self.estimator.clip_values is not None:
-                #     grad_torch_valid = grad_torch_valid / self.estimator.clip_values[1]
-
                 # Gradient ascent: update perturbation to maximize loss
                 # Average gradients across valid samples only
                 grad_avg = grad_torch_valid.mean(dim=0, keepdim=True)
 
+                # Save diagnostic info before update
+                if i_iter % 10 == 0 or i_iter == 0:
+                    with torch.no_grad():
+                        pert_norm_before = self._perturbation_torch.norm().item()
+                        grad_norm = grad_avg.norm().item()
+                        grad_mean = grad_avg.abs().mean().item()
+
+                # Use optimizer properly (like OSFD does)
+                # Clear previous gradients
+                optimizer.zero_grad()
+
+                # Manually assign gradient to perturbation parameter
+                # Negate for gradient ascent (maximize loss)
+                # Keep shape [1, 3, H, W] to match perturbation shape
+                self._perturbation_torch.grad = -grad_avg
+
+                # Apply optimizer step (uses Adam's momentum and adaptive LR)
+                optimizer.step()
+
+                # Enforce epsilon constraint using base class
                 with torch.no_grad():
-                    # Get current learning rate from scheduler
-                    current_lr = optimizer.param_groups[0]['lr']
-
-                    # Sign gradient for robustness (like FGSM)
-                    self._perturbation_torch.data += current_lr * torch.sign(grad_avg)
-
-                    # Enforce epsilon constraint using base class
                     self._enforce_epsilon(self.eps)
+
+                    # Debug logging
+                    if i_iter % 10 == 0 or i_iter == 0:
+                        pert_norm_after = self._perturbation_torch.norm().item()
+                        logger.debug(
+                            f"Iter {i_iter}: grad_norm={grad_norm:.6f}, grad_mean={grad_mean:.6f}, "
+                            f"pert_before={pert_norm_before:.6f}, pert_after={pert_norm_after:.6f}, "
+                            f"eps={self.eps:.6f}"
+                        )
 
                 if i_iter == 0 and batch_id == 0:
                     logger.info(f"Using ART loss_gradient: grad shape={grad_torch_valid.shape}, norm={grad_torch_valid.norm():.4f}")
-
-            # Step optimizer (no-op since we do manual updates, but required for scheduler)
-            optimizer.step()
 
             # Step the learning rate scheduler
             if scheduler is not None:
                 scheduler.step()
 
+            # Get current learning rate
+            current_lr = optimizer.param_groups[0]['lr']
+
             if self.verbose and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
-                logger.info(f"Iter {i_iter}/{self.max_iter}: Perturbation norm = {self._perturbation_torch.norm().item():.6f}")
+                logger.info(
+                    f"Iter {i_iter}/{self.max_iter}: Perturbation norm = {self._perturbation_torch.norm().item():.6f}, "
+                    f"LR = {current_lr:.6f}"
+                )
+
+            # Progress callback for SSE updates
+            if self.progress_callback and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
+                try:
+                    perturbation_norm = self._perturbation_torch.norm().item()
+                    self.progress_callback(i_iter, self.max_iter, perturbation_norm, current_lr)
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
 
     def _apply_perturbation_with_mask(
         self,

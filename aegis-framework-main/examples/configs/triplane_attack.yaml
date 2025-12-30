@@ -1,0 +1,50 @@
+attack_name: "Triplane 3D Attack on a Single Pose"
+
+# --- Attack Configuration ---
+attack:
+  params:
+    type: "triplane"  # Specifies the TriplaneAttack class
+    resolution: 64
+    initialization_type: "random"
+    img_size: [480, 640]
+  
+  # Path to the pre-trained Neural Texture Renderer (NTR) model weights
+  renderer_weights:
+    ntr: "assets/weights/NTR/ntr_model.pth"
+
+  loss_params:
+    iou_threshold: 0.1
+    class_conf_threshold: 0.05
+    top_k_boxes: -1
+    top_n_classes: 3
+    lambda_targeted: 1.0
+    lambda_agnostic: 1.5
+
+# --- Victim Model Configuration ---
+victims:
+  - name: "yolo12x"
+    type: "yolo"
+    path: "weights/YOLO/yolo12x.pt" # IMPORTANT: Update path
+    car_class_id: 2
+
+# --- Dataset Configuration ---
+# This is the key part: using a dictionary for a single, fully-specified pose.
+dataset:
+  path: "assets/extracted_datasets/active_dataset/"
+
+  # These values should reflect the target rendering resolution.
+  height: 480
+  width: 640
+  # These values should reflect the resolution of the original source data.
+  original_height: 480
+  original_width: 640
+
+# --- Output & Training Configuration ---
+output_path: "results/triplane_single_pose/textures.pt"
+clear_output_dir_on_start: true
+
+training:
+  epochs: 100 # More epochs might be needed to converge on a single complex pose
+  batch_size: 1
+  learning_rate: 0.02
+  vis_every_n_epochs: 50

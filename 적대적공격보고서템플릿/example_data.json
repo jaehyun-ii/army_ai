@@ -1,0 +1,127 @@
+{
+  "experiment_date": "2025-12-29",
+  "experimenter": "AI 보안팀",
+
+  "MODEL_NAME": "YOLOv8n (Nano)",
+  "MODEL_ARCHITECTURE": "YOLOv8 - Ultralytics",
+  "MODEL_SIZE": "6.2 MB (3.2M parameters)",
+  "INPUT_RESOLUTION": "640×640 pixels",
+  "NUM_CLASSES": "80 classes (COCO)",
+  "CLASS_NAMES": "person, bicycle, car, motorcycle, airplane, bus, train, truck, boat, ...",
+  "INFERENCE_DEVICE": "NVIDIA RTX 4090 (CUDA 12.1)",
+  "CONFIDENCE_THRESHOLD": "0.25",
+
+  "DATASET_NAME": "COCO val2017 subset",
+  "TOTAL_IMAGES": "500 images",
+  "TARGET_CLASS": "person",
+  "TARGET_CLASS_IMAGES": "348 images (containing person)",
+  "IMAGE_RESOLUTION_RANGE": "320×240 ~ 1920×1080",
+  "ANNOTATION_FORMAT": "YOLO format (normalized xywh)",
+
+  "ATTACK_TYPE": "PGD (Projected Gradient Descent)",
+  "ATTACK_DESCRIPTION": "PGD는 다중 스텝 반복 최적화를 통해 적대적 perturbation을 생성하는 강력한 공격 기법입니다. FGSM보다 정교하며, 각 스텝마다 epsilon 제약 내에서 gradient 방향으로 이미지를 수정합니다.",
+  "ATTACK_INTENSITY": "Medium",
+  "EPSILON": "8.0",
+  "ITERATIONS": "300",
+  "ALPHA": "2.0 (ε/4)",
+
+  "GPU_INFO": "NVIDIA RTX 4090 (24GB VRAM)",
+  "BATCH_SIZE": "32",
+  "TOTAL_TIME": "47분 23초",
+  "AVG_TIME_PER_IMAGE": "5.7초",
+
+  "clean_metrics": {
+    "f1": 0.7068,
+    "ap50": 0.6843,
+    "ap75": 0.5312,
+    "ap": 0.4521,
+    "precision": 0.7234,
+    "recall": 0.6912
+  },
+
+  "attacked_metrics": {
+    "f1": 0.2731,
+    "ap50": 0.2156,
+    "ap75": 0.1523,
+    "ap": 0.1234,
+    "precision": 0.3456,
+    "recall": 0.2187
+  },
+
+  "CLEAN_MAP50": "0.6843",
+  "CLEAN_MAP75": "0.5312",
+  "CLEAN_MAP": "0.4521",
+  "CLEAN_PRECISION": "0.7234",
+  "CLEAN_RECALL": "0.6912",
+  "CLEAN_F1": "0.7068",
+  "CLEAN_DETECTION_RATE": "94.3%",
+
+  "ATTACKED_MAP50": "0.2156",
+  "ATTACKED_MAP50_NOTE": "심각한 저하",
+  "ATTACKED_MAP75": "0.1523",
+  "ATTACKED_MAP75_NOTE": "심각한 저하",
+  "ATTACKED_MAP": "0.1234",
+  "ATTACKED_MAP_NOTE": "심각한 저하",
+  "ATTACKED_PRECISION": "0.3456",
+  "ATTACKED_PRECISION_NOTE": "대폭 감소",
+  "ATTACKED_RECALL": "0.2187",
+  "ATTACKED_RECALL_NOTE": "대폭 감소",
+  "ATTACKED_F1": "0.2731",
+  "ATTACKED_F1_NOTE": "대폭 감소",
+  "ATTACKED_DETECTION_RATE": "31.7%",
+  "ATTACKED_DETECTION_RATE_NOTE": "치명적 저하",
+
+  "DELTA_MAP50": "-68.5%",
+  "DELTA_MAP50_CLASS": "negative",
+  "DELTA_MAP75": "-71.3%",
+  "DELTA_MAP75_CLASS": "negative",
+  "DELTA_MAP": "-72.7%",
+  "DELTA_MAP_CLASS": "negative",
+  "DELTA_PRECISION": "-52.2%",
+  "DELTA_PRECISION_CLASS": "negative",
+  "DELTA_RECALL": "-68.4%",
+  "DELTA_RECALL_CLASS": "negative",
+  "DELTA_F1": "-61.4%",
+  "DELTA_F1_CLASS": "negative",
+  "DELTA_DETECTION_RATE": "-66.4%",
+  "DELTA_DETECTION_RATE_CLASS": "negative",
+
+  "DELTA_MAP_PERCENT": "-68.5%",
+  "DELTA_MAP_PERCENT_CLASS": "negative",
+  "DELTA_MAP_PERCENT_EVAL": "⚠️ 심각한 성능 저하",
+  "ASR_VALUE": "73.2%",
+  "ASR_CLASS": "negative",
+  "ASR_EVAL": "✓ 매우 효과적인 공격",
+  "FNR_INCREASE": "+62.6%",
+  "FNR_INCREASE_CLASS": "negative",
+  "FNR_INCREASE_EVAL": "⚠️ 많은 객체가 미탐지됨",
+  "AVG_CONF_DECREASE": "-58.3%",
+  "AVG_CONF_DECREASE_CLASS": "negative",
+  "AVG_CONF_DECREASE_EVAL": "⚠️ 탐지 신뢰도 대폭 감소",
+
+  "clean_pr_data": {
+    "precision": [1.0, 0.95, 0.92, 0.88, 0.84, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55],
+    "recall": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "auc": 0.684
+  },
+
+  "attacked_pr_data": {
+    "precision": [0.8, 0.65, 0.55, 0.45, 0.38, 0.32, 0.28, 0.24, 0.20, 0.18, 0.15],
+    "recall": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "auc": 0.216
+  },
+
+  "per_class_data": {
+    "person": {"clean": 0.6843, "attacked": 0.2156},
+    "car": {"clean": 0.7521, "attacked": 0.4121},
+    "bicycle": {"clean": 0.5234, "attacked": 0.1502}
+  },
+
+  "clean_confidences": [0.92, 0.88, 0.91, 0.85, 0.87, 0.93, 0.89, 0.86, 0.90, 0.84, 0.88, 0.91, 0.87, 0.85, 0.89, 0.92, 0.86, 0.88, 0.90, 0.87],
+  "attacked_confidences": [0.34, 0.28, 0.41, 0.25, 0.31, 0.38, 0.29, 0.35, 0.27, 0.33, 0.30, 0.36, 0.32, 0.29, 0.37, 0.26, 0.34, 0.31, 0.28, 0.35],
+
+  "TOTAL_TEST_IMAGES": "348",
+  "FINDINGS_TEXT": "1. 높은 공격 성공률: PGD 공격은 73.2%의 높은 성공률을 보였으며, 대다수의 테스트 이미지에서 객체 탐지 성능을 크게 저하시켰습니다.\n\n2. mAP 대폭 감소: mAP@0.5가 0.6843에서 0.2156으로 68.5% 감소하였으며, 이는 모델의 탐지 능력이 치명적으로 손상되었음을 의미합니다.\n\n3. 탐지 신뢰도 저하: 공격 후 평균 confidence score가 58.3% 감소하여, 탐지된 객체조차도 낮은 신뢰도를 보였습니다.\n\n4. False Negative 증가: False Negative Rate가 62.6% 증가하여 실제 존재하는 객체를 탐지하지 못하는 경우가 대폭 증가했습니다.\n\n5. 육안 식별 어려움: ε=8.0의 perturbation은 육안으로 거의 식별이 불가능하여 실제 운용 환경에서 탐지가 어려울 것으로 예상됩니다.",
+
+  "RECOMMENDATIONS_TEXT": "1. Adversarial Training 도입: PGD와 같은 강력한 공격 샘플을 학습 데이터에 포함시켜 모델의 강건성을 향상시켜야 합니다.\n\n2. Input Preprocessing 강화: JPEG 압축, 가우시안 블러, 비트 깊이 감소 등의 전처리를 통해 perturbation을 완화할 수 있습니다.\n\n3. 앙상블 모델 구축: 서로 다른 아키텍처의 모델을 앙상블하여 단일 모델 공격의 효과를 감소시킬 수 있습니다.\n\n4. 이상 탐지 시스템 구축: 적대적 샘플을 탐지하는 별도의 이상 탐지 시스템을 도입하여 공격을 사전에 차단해야 합니다.\n\n5. 정기적인 취약성 평가: 새로운 공격 기법에 대한 정기적인 평가와 대응 방안 수립이 필요합니다."
+}

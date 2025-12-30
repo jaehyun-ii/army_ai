@@ -57,3 +57,17 @@ kornia==0.7.4  # For naturalistic adversarial patches (replaces deprecated torch
 # System monitoring
 psutil>=6.0.0
 nvidia-ml-py>=12.560.30  # pynvml - NVIDIA Management Library for GPU monitoring
+
+# ===============================================
+# PDF Report Generation (Optional)
+# ===============================================
+# Install separately if needed: pip install weasyprint
+# Requires system packages: libcairo2-dev libpango1.0-dev (Ubuntu/Debian)
+# weasyprint>=60.0  # PDF generation from HTML (optional)
+# cssselect2>=0.7.0  # WeasyPrint dependency
+# tinycss2>=1.2.0  # WeasyPrint dependency
+
+weasyprint>=60.0
+cssselect2>=0.7.0
+tinycss2>=1.2.0
+Pillow>=10.0.0  # Already in NGC base but ensure version

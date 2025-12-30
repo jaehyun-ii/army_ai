@@ -1,0 +1,49 @@
+attack_name: "Single-Plane 3D Attack on a Single Pose"
+
+# --- Attack Configuration ---
+attack:
+  params:
+    type: "single_plane" 
+    resolution: 64
+    initialization_type: "random"
+    img_size: [480, 640]
+
+  renderer_weights:
+    ntr: "assets/weights/NTR/ntr_model.pth"
+
+  loss_params:
+    iou_threshold: 0.1
+    class_conf_threshold: 0.05
+    top_k_boxes: -1
+    top_n_classes: 3
+    lambda_targeted: 1.0
+    lambda_agnostic: 1.5
+
+# --- Victim Model Configuration ---
+victims:
+  - name: "yolo12x"
+    type: "yolo"
+    path: "weights/YOLO/yolo12x.pt"
+    car_class_id: 2
+
+# --- Dataset Configuration ---
+# The structure is identical to the triplane example.
+dataset:
+  path: "assets/extracted_datasets/active_dataset/"
+
+  # These values should reflect the target rendering resolution.
+  height: 480
+  width: 640
+  # These values should reflect the resolution of the original source data.
+  original_height: 480
+  original_width: 640
+
+# --- Output & Training Configuration ---
+output_path: "results/single_plane_single_pose/texture.pt"
+clear_output_dir_on_start: true
+
+training:
+  epochs: 200
+  batch_size: 1
+  learning_rate: 0.01
+  vis_every_n_epochs: 20

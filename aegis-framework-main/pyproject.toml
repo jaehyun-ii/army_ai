@@ -1,0 +1,62 @@
+# aegis-framework/pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aegis-framework"
+version = "0.1.0"
+description = "A framework for generating adversarial attacks against object detectors."
+dependencies = [
+    # --- Core ML & Computer Vision ---
+    "torch",
+    "torchvision",
+    "ultralytics>=8.0.0", # Ultralytics handles YOLOv5/8, RT-DETR, and many CV utils
+    "opencv-python-headless", # Use headless for servers; use opencv-python if you need a GUI
+    "Pillow", # PIL is used for image manipulation
+    "timm",   # Often a dependency for advanced vision models, good to have
+    
+    # --- Data Handling & Visualization ---
+    "numpy",
+    "tqdm",
+    "seaborn", # Useful for plotting/analysis, though not strictly required by the attack code
+    "imageio",
+    "imageio-ffmpeg", # For saving/loading videos/gifs if you extend to that
+    "huggingface-hub",
+
+    # --- Framework & Configuration ---
+    "pydantic",
+    "pyyaml",
+
+    # --- Adversarial Attack & Analysis ---
+    "torchmetrics", # Excellent for evaluating model performance beyond the attack
+    "supervision",  # Great utilities for working with bounding boxes, masks, and annotations
+    
+    # --- Optional Model Support (see below) ---
+    "transformers", # For GroundingDINO
+    "autodistill-grounding-dino>=0.1.2",
+    "roboflow" # Often used with autodistill and supervision
+]
+
+[project.optional-dependencies]
+dino = [
+    "transformers",
+    "autodistill-grounding-dino>=0.1.2",
+]
+
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+]
+
+[project.scripts]
+aegis-attack = "aegis.core.cli:main"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]

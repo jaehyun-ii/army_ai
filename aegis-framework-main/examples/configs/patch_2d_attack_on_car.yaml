@@ -1,0 +1,48 @@
+attack_name: "Square Patch on Car (vs YOLOv12x)"
+
+# --- Attack-Specific Configuration ---
+attack:
+  params:
+    type: "patch"  # This 'type' field is now mandatory inside 'params'
+    shape: "square"
+    placement: "on_car" # off_car or on_car
+    relative_size: 0.2
+    learnable_patch_resolution: 128
+    patch_camouflage_lambda: 20.0
+    position_learning_rate: 0.0005
+    translation_limit_pixels: 30
+    img_size: [480, 640]
+  loss_params:
+    iou_threshold: 0.1
+    class_conf_threshold: 0.05
+    top_k_boxes: -1
+    top_n_classes: 3
+    lambda_targeted: 1.0
+    lambda_agnostic: 0.0
+
+# --- Victim Model Configuration ---
+victims:
+  - name: "yolo12x"
+    type: "yolo"
+    path: "weights/YOLO/yolo12x.pt" # IMPORTANT: Make sure this path is correct
+    car_class_id: 2
+
+# --- General Configuration ---
+# dataset_path: "/home/moses/ADD/active_dataset_hd" 
+dataset:
+  # Point to a single image file. The framework will auto-generate the mask.
+  path: "./assets/extracted_datasets/active_dataset/reference_gray/xref/loc0000.png" # IMPORTANT: Update with your image path
+  
+  # These should match the img_size in the attack params
+  height: 480
+  width: 640
+
+output_path: "results/patch_square_on_car/final_patch.pt"
+
+training:
+  epochs: 500  
+  batch_size: 1
+  learning_rate: 0.7
+  vis_every_n_epochs: 10
+
+clear_output_dir_on_start: True

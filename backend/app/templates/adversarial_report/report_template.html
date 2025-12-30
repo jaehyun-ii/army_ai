@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>적대적 공격 실험 보고서</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 표지 -->
+    <div class="page cover-page">
+        <div class="cover-content">
+            <div class="header-box">
+                <h1>적대적 공격 실험 보고서</h1>
+                <h2>AI 객체 탐지 모델 취약성 평가</h2>
+            </div>
+
+            <div class="info-table">
+                <table>
+                    <tr>
+                        <th>실험 일시</th>
+                        <td>{{EXPERIMENT_DATE}}</td>
+                    </tr>
+                    <tr>
+                        <th>실험자</th>
+                        <td>{{EXPERIMENTER_NAME}}</td>
+                    </tr>
+                    <tr>
+                        <th>대상 시스템</th>
+                        <td>{{SYSTEM_NAME}}</td>
+                    </tr>
+                    <tr>
+                        <th>보고서 버전</th>
+                        <td>{{REPORT_VERSION}}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 1. 모델 및 데이터셋 정보 -->
+    <div class="page">
+        <div class="section-header">
+            <h2>1. 모델 및 데이터셋 정보</h2>
+        </div>
+
+        <div class="section-content">
+            <h3>1.1 대상 모델 정보</h3>
+            <table class="info-table">
+                <tr>
+                    <th width="30%">모델 이름</th>
+                    <td>{{MODEL_NAME}}</td>
+                </tr>
+                <tr>
+                    <th>모델 아키텍처</th>
+                    <td>{{MODEL_ARCHITECTURE}}</td>
+                </tr>
+                <tr>
+                    <th>모델 크기</th>
+                    <td>{{MODEL_SIZE}}</td>
+                </tr>
+                <tr>
+                    <th>입력 해상도</th>
+                    <td>{{INPUT_RESOLUTION}}</td>
+                </tr>
+                <tr>
+                    <th>클래스 수</th>
+                    <td>{{NUM_CLASSES}}</td>
+                </tr>
+                <tr>
+                    <th>클래스 목록</th>
+                    <td>{{CLASS_NAMES}}</td>
+                </tr>
+                <tr>
+                    <th>추론 환경</th>
+                    <td>{{INFERENCE_DEVICE}}</td>
+                </tr>
+                <tr>
+                    <th>Confidence Threshold</th>
+                    <td>{{CONFIDENCE_THRESHOLD}}</td>
+                </tr>
+            </table>
+
+            <h3>1.2 실험 데이터셋 정보</h3>
+            <table class="info-table">
+                <tr>
+                    <th width="30%">데이터셋 이름</th>
+                    <td>{{DATASET_NAME}}</td>
+                </tr>
+                <tr>
+                    <th>데이터 차원</th>
+                    <td>{{DATASET_DIMENSION}}</td>
+                </tr>
+                <tr>
+                    <th>총 이미지 수</th>
+                    <td>{{TOTAL_IMAGES}}</td>
+                </tr>
+                <tr>
+                    <th>타겟 클래스</th>
+                    <td>{{TARGET_CLASS}}</td>
+                </tr>
+                <tr>
+                    <th>어노테이션 형식</th>
+                    <td>{{ANNOTATION_FORMAT}}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- 2. 공격 기법 정보 -->
+    <div class="page">
+        <div class="section-header">
+            <h2>2. 사용된 공격 기법</h2>
+        </div>
+
+        <div class="section-content">
+            <h3>2.1 공격 방법</h3>
+            <div class="attack-info-box">
+                <h4>공격 유형: {{ATTACK_TYPE}}</h4>
+                <p class="attack-description">{{ATTACK_DESCRIPTION}}</p>
+            </div>
+
+            <h3>2.2 실험 환경</h3>
+            <table class="info-table">
+                <tr>
+                    <th width="30%">GPU</th>
+                    <td>{{GPU_INFO}}</td>
+                </tr>
+                <tr>
+                    <th>배치 크기</th>
+                    <td>{{BATCH_SIZE}}</td>
+                </tr>
+                <tr>
+                    <th>총 처리 시간</th>
+                    <td>{{TOTAL_TIME}}</td>
+                </tr>
+                <tr>
+                    <th>평균 이미지당 시간</th>
+                    <td>{{AVG_TIME_PER_IMAGE}}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- 3. 정량적 결과 -->
+    <div class="page">
+        <div class="section-header">
+            <h2>3. 정량적 결과 분석</h2>
+        </div>
+
+        <div class="section-content">
+            <h3>3.1 전체 성능 비교</h3>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th rowspan="2">지표</th>
+                        <th colspan="2">원본 (Clean)</th>
+                        <th colspan="2">공격 후 (Attacked)</th>
+                        <th rowspan="2">변화량</th>
+                    </tr>
+                    <tr>
+                        <th>값</th>
+                        <th>비고</th>
+                        <th>값</th>
+                        <th>비고</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>mAP@0.5 (AP@50)</strong></td>
+                        <td class="metric-value">{{CLEAN_MAP50}}</td>
+                        <td>기준 성능</td>
+                        <td class="metric-value attacked">{{ATTACKED_MAP50}}</td>
+                        <td>{{ATTACKED_MAP50_NOTE}}</td>
+                        <td class="delta {{DELTA_MAP50_CLASS}}">{{DELTA_MAP50}}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>mAP@0.75 (AP@75)</strong></td>
+                        <td class="metric-value">{{CLEAN_MAP75}}</td>
+                        <td>중간 임계값</td>
+                        <td class="metric-value attacked">{{ATTACKED_MAP75}}</td>
+                        <td>{{ATTACKED_MAP75_NOTE}}</td>
+                        <td class="delta {{DELTA_MAP75_CLASS}}">{{DELTA_MAP75}}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>mAP@0.5:0.95 (AP@[50:95])</strong></td>
+                        <td class="metric-value">{{CLEAN_MAP}}</td>
+                        <td>종합 성능</td>
+                        <td class="metric-value attacked">{{ATTACKED_MAP}}</td>
+                        <td>{{ATTACKED_MAP_NOTE}}</td>
+                        <td class="delta {{DELTA_MAP_CLASS}}">{{DELTA_MAP}}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Precision</strong></td>
+                        <td class="metric-value">{{CLEAN_PRECISION}}</td>
+                        <td>정밀도</td>
+                        <td class="metric-value attacked">{{ATTACKED_PRECISION}}</td>
+                        <td>{{ATTACKED_PRECISION_NOTE}}</td>
+                        <td class="delta {{DELTA_PRECISION_CLASS}}">{{DELTA_PRECISION}}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Recall</strong></td>
+                        <td class="metric-value">{{CLEAN_RECALL}}</td>
+                        <td>재현율</td>
+                        <td class="metric-value attacked">{{ATTACKED_RECALL}}</td>
+                        <td>{{ATTACKED_RECALL_NOTE}}</td>
+                        <td class="delta {{DELTA_RECALL_CLASS}}">{{DELTA_RECALL}}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>F1 Score</strong></td>
+                        <td class="metric-value">{{CLEAN_F1}}</td>
+                        <td>조화 평균</td>
+                        <td class="metric-value attacked">{{ATTACKED_F1}}</td>
+                        <td>{{ATTACKED_F1_NOTE}}</td>
+                        <td class="delta {{DELTA_F1_CLASS}}">{{DELTA_F1}}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>3.2 공격 효과 지표</h3>
+            <table class="attack-effect-table">
+                <thead>
+                    <tr>
+                        <th>지표</th>
+                        <th>값</th>
+                        <th>평가</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>ΔmAP (감소율)</strong></td>
+                        <td class="metric-value {{DELTA_MAP_PERCENT_CLASS}}">{{DELTA_MAP_PERCENT}}</td>
+                        <td>{{DELTA_MAP_PERCENT_EVAL}}</td>
+                    </tr>
+                    <tr class="highlight-row">
+                        <td><strong>Attack Success Rate (ASR)</strong></td>
+                        <td class="metric-value {{ASR_CLASS}}">{{ASR_VALUE}}</td>
+                        <td>{{ASR_EVAL}}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Robustness Ratio</strong></td>
+                        <td class="metric-value">{{ROBUSTNESS_RATIO}}</td>
+                        <td>공격 후 / 원본 성능 비율</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>3.3 성능 비교 그래프</h3>
+
+            <h4>3.3.1 Clean vs Attacked 성능 비교 (막대 그래프)</h4>
+            <div class="chart-container">
+                <div class="chart-box full-width">
+                    <h5>전체 평가 지표 비교</h5>
+                    <img src="{{METRICS_BAR_CHART}}" alt="Clean vs Attacked Metrics Comparison">
+                    <p class="chart-description">
+                        6개 주요 지표 (F1 Score, AP@50, AP@75, AP@[50:95], Precision, Recall)에 대한
+                        Clean 데이터셋과 Attacked 데이터셋의 성능 비교
+                    </p>
+                </div>
+            </div>
+
+            <h4>3.3.2 Precision-Recall Curve</h4>
+            <div class="chart-container">
+                <div class="chart-box full-width">
+                    <h5>PR Curve 비교</h5>
+                    <img src="{{PR_CURVE_CHART}}" alt="Precision-Recall Curve">
+                    <p class="chart-description">
+                        Clean (파란선)과 Attacked (빨간선) 데이터셋의 Precision-Recall 커브 비교.
+                        곡선 아래 면적(AUC)이 클수록 우수한 성능을 나타냅니다.
+                        공격 후 PR 커브가 왼쪽 아래로 이동하면 성능 저하를 의미합니다.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. 결론 -->
+    <div class="page">
+        <div class="section-header">
+            <h2>4. 결론</h2>
+        </div>
+
+        <div class="section-content">
+            <h3>4.1 실험 결과 요약</h3>
+            <div class="summary-box">
+                <ul>
+                    <li><strong>공격 방법:</strong> {{ATTACK_TYPE}}</li>
+                    <li><strong>공격 강도:</strong> {{ATTACK_INTENSITY}}</li>
+                    <li><strong>테스트 이미지 수:</strong> {{TOTAL_TEST_IMAGES}}</li>
+                    <li><strong>공격 성공률:</strong> {{ASR_VALUE}}</li>
+                    <li><strong>mAP 감소율:</strong> {{DELTA_MAP_PERCENT}}</li>
+                </ul>
+            </div>
+
+            <h3>4.2 주요 발견사항</h3>
+            <div class="findings-box">
+                <pre>{{FINDINGS_TEXT}}</pre>
+            </div>
+
+            <h3>4.3 권장사항</h3>
+            <div class="recommendations-box">
+                <pre>{{RECOMMENDATIONS_TEXT}}</pre>
+            </div>
+        </div>
+
+        <div class="report-footer">
+            <p>보고서 생성일: {{REPORT_GENERATION_DATE}}</p>
+            <p>Army AI Defense System - Adversarial Attack Report</p>
+        </div>
+    </div>
+</body>
+</html>

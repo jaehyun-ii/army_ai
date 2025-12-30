@@ -147,6 +147,7 @@ class EvalDatasetResult(Base):
     # Metrics for this specific dataset
     metrics_summary = Column(JSONB)  # Overall metrics (map, map50, precision, recall, f1, etc.)
     iou_distribution = Column(JSONB)  # IoU distribution statistics
+    pr_curves = Column(JSONB)  # PR curves for IoU 0.5, 0.75, 0.95
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -167,6 +168,10 @@ class EvalDatasetResult(Base):
         CheckConstraint(
             "iou_distribution IS NULL OR jsonb_typeof(iou_distribution)='object'",
             name="chk_eval_dataset_iou"
+        ),
+        CheckConstraint(
+            "pr_curves IS NULL OR jsonb_typeof(pr_curves)='object'",
+            name="chk_eval_dataset_pr_curves"
         ),
     )
 
