@@ -1,0 +1,797 @@
+/* ========================================
+   육군 보고서 양식 - 웹 레이아웃 재구현
+   원본 양식의 시각적 요소를 현대적 CSS로 구현
+   ======================================== */
+
+/* 전역 스타일 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+}
+
+body {
+    font-family: 'Noto Sans KR', '함초롬돋움', 'Malgun Gothic', sans-serif;
+    line-height: 1.6;  /* 160% */
+    color: #000000;
+    background-color: #ebebeb;
+}
+
+/* 페이지 레이아웃 (A4 세로) */
+.page {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 15mm 20mm;  /* 상하 15mm, 좌우 20mm */
+    margin: 10mm auto;
+    background: white;
+    box-shadow: 0 0 8px 3px #d3d3d3;
+    page-break-after: always;
+    position: relative;
+    box-sizing: border-box;
+    overflow: visible;
+}
+
+@page {
+    size: A4 portrait;
+    margin: 10mm 0;  /* 머리말/꼬리말 여백만 유지, 좌우는 0 */
+}
+
+@media print {
+    .page {
+        margin: 0;
+        box-shadow: none;
+        page-break-after: always;
+        width: 100%;
+        padding: 5mm 20mm; /* 좌우 여백 20mm */
+    }
+    
+    .header-box {
+        max-width: 100% !important; /* 너비 초과 방지 */
+    }
+}
+
+/* ========================================
+   표지 페이지
+   ======================================== */
+.cover-page {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    text-align: center;
+}
+
+/* 표지 우상단 로고 */
+.top-right-logo {
+    position: absolute;
+    top: 20mm;
+    right: 20mm;
+    width: 140px;
+    height: auto;
+}
+
+/* 표지 부제 */
+.cover-subtitle {
+    font-size: 14pt;
+    color: #000000;
+    margin-top: 20mm;
+    margin-bottom: 20mm;
+    text-align: center;
+}
+
+/* 표지 제목 박스 (원본의 큰 테두리 박스) */
+.header-box {
+    margin-top: 20mm;
+    margin-bottom: 40mm;
+    padding: 25px 40px;
+    border-top: 3.5px solid #1B1760;
+    border-bottom: 5px solid #1B1760;
+    width: 100%;
+    max-width: 650px;
+}
+
+.header-box h1 {
+    font-size: 34pt;
+    color: #000000;
+    margin-bottom: 15px;
+    font-weight: bold;
+    letter-spacing: 0.04em;
+}
+
+.header-box h2 {
+    font-size: 18pt;
+    color: #000000;
+    font-weight: normal;
+}
+
+/* 표지 날짜 */
+.cover-date {
+    font-size: 20pt;
+    color: #000000;
+    margin-bottom: 50mm;
+}
+
+/* 표지 하단 로고 영역 */
+.cover-logo {
+    position: absolute;
+    bottom: 35mm;
+    left: 20mm;
+    width: 92mm;
+    height: 24mm;
+}
+
+/* 표지 페이지 정보 테이블 - 중앙 정렬 */
+.cover-page .info-table {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.cover-page .info-table table {
+    width: auto;
+    max-width: 550px;
+    margin: 0;
+}
+
+/* 표지 페이지 하단 영역 */
+.cover-bottom {
+    position: absolute;
+    bottom: 30mm;
+    left: 0;
+    right: 0;
+    text-align: center;
+}
+
+/* 국방부 로고 */
+.ministry-logo {
+    width: 180px;
+    height: auto;
+    margin-bottom: 15px;
+}
+
+/* 표지 페이지 하단 텍스트 */
+.report-footer-text {
+    font-size: 11pt;
+    color: #000000;
+    margin: 0;
+}
+
+/* ========================================
+   섹션 헤더 (원본의 파란색 테두리 박스)
+   ======================================== */
+.section-header {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 25px;
+    margin-top: 0;
+    width: 100%;
+    max-width: 100%;
+}
+
+.section-header .section-number {
+    background-color: rgb(70, 76, 250);
+    color: #ffffff;
+    font-size: 24pt;
+    font-weight: bold;
+    padding: 12px 25px;
+    border: 2px solid rgb(70, 76, 250);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 60px;
+}
+
+.section-header .section-title {
+    background-color: #ffffff;
+    color: #000000;
+    font-size: 24pt;
+    font-weight: bold;
+    letter-spacing: 0.04em;
+    padding: 12px 20px;
+    border: 2px solid #000000;
+    flex: 1;
+    display: flex;
+    align-items: center;
+}
+
+/* Legacy support for old h2 style */
+.section-header h2 {
+    display: inline-block;
+    font-size: 24pt;
+    color: #000000;
+    font-weight: bold;
+    letter-spacing: 0.04em;
+    padding: 12px 20px;
+    border-top: 3px solid #13137E;
+    border-bottom: 5px solid #13137E;
+    min-width: 95mm;
+}
+
+/* ========================================
+   번호 매기기 박스 (원본의 파란색 배경)
+   ======================================== */
+.numbered-section {
+    margin: 20px 0;
+    border: 2px solid #000000;
+}
+
+.numbered-section-header {
+    display: flex;
+    border-bottom: 2px solid #000000;
+}
+
+.section-number {
+    background-color: #4C4CFF;
+    color: #FFFFFF;
+    font-size: 20pt;
+    font-weight: bold;
+    padding: 5px 5px;
+    min-width: 12mm;
+    text-align: center;
+    border-right: 2px solid #000000;
+}
+
+.section-title {
+    flex: 1;
+    font-size: 17pt;
+    font-weight: normal;
+    padding: 5px 5px;
+    letter-spacing: -0.03em;
+}
+
+.section-title .emphasis {
+    color: #FF0000;
+}
+
+/* ========================================
+   본문 콘텐츠
+   ======================================== */
+.section-content {
+    margin-top: 20px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+/* 소제목 (□) */
+.section-content h3 {
+    font-size: 16pt;
+    color: #0000FF;
+    margin-top: 20px;
+    margin-bottom: 12px;
+    font-weight: bold;
+}
+
+.section-content h3::before {
+    content: "□ ";
+}
+
+.section-content h3 .emphasis {
+    color: #FF0000;
+}
+
+/* 중제목 (◦) */
+.section-content h4 {
+    font-size: 15pt;
+    color: #000000;
+    margin-top: 15px;
+    margin-bottom: 10px;
+    font-weight: bold;
+    padding-left: 15px;
+}
+
+.section-content h4::before {
+    content: "◦ ";
+    margin-left: -15px;
+}
+
+/* 본문 항목 (∙) */
+.section-content p {
+    font-size: 14pt;
+    color: #000000;
+    margin: 8px 0;
+    padding-left: 30px;
+    line-height: 1.5;
+}
+
+.section-content p.bullet::before {
+    content: "∙ ";
+    margin-left: -15px;
+}
+
+/* 참고사항 (※) */
+.section-content .note {
+    font-size: 15pt;
+    color: #000000;
+    font-weight: bold;
+    margin-top: 15px;
+    padding-left: 15px;
+}
+
+.section-content .note::before {
+    content: "※ ";
+    margin-left: -15px;
+}
+
+.section-content .note .emphasis {
+    color: #FF0000;
+}
+
+/* 강조 텍스트 */
+.emphasis {
+    color: #FF0000;
+}
+
+/* 한자 표기 */
+.hanja {
+    font-family: 'Noto Serif KR', serif;
+}
+
+/* ========================================
+   테이블 스타일
+   ======================================== */
+table {
+    width: 100%;
+    max-width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    font-size: 10pt;
+    table-layout: auto;
+    word-wrap: break-word;
+}
+
+.info-table {
+    border: 2px solid #1B1760;
+    margin: 20px 0;
+}
+
+.info-table th {
+    background-color: #1B1760;
+    color: white;
+    padding: 12px 15px;
+    text-align: left;
+    font-weight: bold;
+    font-size: 11pt;
+    width: 30%;
+    vertical-align: middle;
+    border: 1px solid #1B1760;
+}
+
+.info-table td {
+    padding: 12px 15px;
+    border: 1px solid #ddd;
+    font-size: 10pt;
+    background-color: white;
+    vertical-align: middle;
+    line-height: 1.6;
+}
+
+.info-table tr:nth-child(even) td {
+    background-color: #f9f9f9;
+}
+
+/* 결과 테이블 */
+.results-table {
+    border: 2px solid #1B1760;
+    font-size: 10pt;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.results-table thead th {
+    background-color: #1B1760;
+    color: white;
+    padding: 12px;
+    text-align: center;
+    font-weight: bold;
+}
+
+.results-table tbody td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    text-align: center;
+}
+
+.results-table tbody tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+.results-table tbody td:first-child {
+    text-align: left;
+    font-weight: bold;
+    background-color: #f0f0f0;
+}
+
+/* 공격 효과 테이블 */
+.attack-effect-table {
+    border: 2px solid #cc0000;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.attack-effect-table thead th {
+    background-color: #cc0000;
+    color: white;
+    padding: 12px;
+    text-align: center;
+}
+
+.attack-effect-table tbody td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    text-align: center;
+}
+
+.attack-effect-table tbody td:first-child {
+    text-align: left;
+    font-weight: bold;
+    background-color: #fff0f0;
+}
+
+/* ========================================
+   메트릭 및 결과 표시
+   ======================================== */
+.metric-value {
+    font-weight: bold;
+    font-size: 11pt;
+    color: #006600;
+}
+
+.metric-value.attacked {
+    color: #cc0000;
+}
+
+.delta {
+    font-weight: bold;
+    font-size: 11pt;
+}
+
+.delta.negative {
+    color: #cc0000;
+}
+
+.delta.positive {
+    color: #006600;
+}
+
+.highlight-row {
+    background-color: #fffacd !important;
+}
+
+/* ========================================
+   정보 박스
+   ======================================== */
+.attack-info-box {
+    background-color: #fff3e0;
+    border-left: 4px solid #ff9800;
+    padding: 15px;
+    margin: 15px 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.attack-info-box h4 {
+    color: #e65100;
+    margin-bottom: 10px;
+    font-size: 12pt;
+}
+
+.attack-description {
+    color: #555;
+    font-size: 10pt;
+    line-height: 1.6;
+}
+
+.summary-box,
+.findings-box,
+.recommendations-box {
+    background-color: #f0f8ff;
+    border: 1px solid #4C4CFF;
+    border-radius: 5px;
+    padding: 20px;
+    margin: 15px 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.findings-box {
+    background-color: #fff9e6;
+    border-color: #ffc107;
+}
+
+.recommendations-box {
+    background-color: #e8f5e9;
+    border-color: #4caf50;
+}
+
+/* ========================================
+   이미지 및 차트
+   ======================================== */
+.image-comparison {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.image-box {
+    flex: 1;
+    text-align: center;
+    background: white;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+.image-box img {
+    max-width: 100%;
+    height: auto;
+    border: 2px solid #ccc;
+    border-radius: 4px;
+    margin: 10px 0;
+}
+
+.chart-container {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    margin: 20px 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.chart-box {
+    flex: 1;
+    text-align: center;
+    background: white;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+.chart-box img {
+    max-width: 100%;
+    width: 100%;
+    height: auto;
+    margin-top: 10px;
+    object-fit: contain;
+}
+
+.chart-description {
+    font-size: 9pt;
+    color: #666;
+    line-height: 1.5;
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #f9f9f9;
+    border-left: 3px solid #4C4CFF;
+}
+
+/* ========================================
+   페이지 하단 (페이지 번호)
+   ======================================== */
+.page-footer {
+    position: absolute;
+    bottom: 10mm;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 10pt;
+    color: #000000;
+    font-family: 'Noto Sans KR', sans-serif;
+}
+
+/* WeasyPrint CSS counter for page numbers */
+@page {
+    @bottom-center {
+        content: "6 - " counter(page);
+    }
+}
+
+.page-number::before {
+    content: "6 - ";
+}
+
+/* ========================================
+   인쇄 최적화
+   ======================================== */
+@media print {
+    body {
+        background: white;
+    }
+
+    .page {
+        box-shadow: none;
+        margin: 0;
+    }
+
+    .section-header {
+        page-break-after: avoid;
+    }
+
+    .numbered-section {
+        page-break-inside: avoid;
+    }
+
+    .image-comparison,
+    .chart-container {
+        page-break-inside: avoid;
+    }
+}
+
+/* ========================================
+   성능 변화 색상
+   ======================================== */
+.performance-critical {
+    background-color: #ffebee !important;
+    font-weight: bold;
+}
+
+.performance-warning {
+    background-color: #fff9e6 !important;
+}
+
+.performance-good {
+    background-color: #e8f5e9 !important;
+}
+
+/* ========================================
+   결과 배지
+   ======================================== */
+.result-badge {
+    display: inline-block;
+    padding: 10px 20px;
+    margin-top: 15px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 11pt;
+    text-align: center;
+}
+
+.result-badge.success {
+    background-color: #4caf50;
+    color: white;
+}
+
+.result-badge.partial {
+    background-color: #ff9800;
+    color: white;
+}
+
+.result-badge.failed {
+    background-color: #f44336;
+    color: white;
+}
+
+/* ========================================
+   추론 결과 비교 (Inference Results)
+   ======================================== */
+.inference-results {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.inference-item {
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    overflow: hidden;
+    background: white;
+}
+
+.inference-item img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.inference-item .caption {
+    padding: 8px;
+    font-size: 9pt;
+    text-align: center;
+    background-color: #f5f5f5;
+    border-top: 1px solid #ddd;
+}
+
+@media print {
+    .inference-results {
+        page-break-inside: avoid;
+    }
+}
+
+/* ========================================
+   추론 결과 비교 테이블
+   ======================================== */
+.inference-comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    border: 2px solid #1B1760;
+}
+
+.inference-comparison-table thead th {
+    background-color: #1B1760;
+    color: white;
+    padding: 12px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 11pt;
+    border: 1px solid #1B1760;
+}
+
+.inference-comparison-table tbody td {
+    padding: 15px;
+    border: 1px solid #ddd;
+    vertical-align: top;
+}
+
+.inference-comparison-table tbody td.image-number {
+    background-color: #f0f0f0;
+    font-weight: bold;
+    font-size: 12pt;
+    text-align: center;
+    width: 80px;
+    color: #1B1760;
+}
+
+.inference-comparison-table tbody td.image-cell {
+    background-color: white;
+    text-align: center;
+    width: 38%;
+}
+
+.inference-comparison-table tbody td.change-cell {
+    background-color: white;
+    text-align: center;
+    vertical-align: middle;
+    width: 15%;
+    font-family: 'Noto Sans KR', sans-serif;
+}
+
+.inference-image-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.inference-image-container img {
+    max-width: 100%;
+    height: auto;
+    border: 2px solid #ccc;
+    border-radius: 4px;
+}
+
+.detection-count {
+    font-size: 10pt;
+    color: #333;
+    font-weight: bold;
+    background-color: #f5f5f5;
+    padding: 5px 10px;
+    border-radius: 3px;
+    border: 1px solid #ddd;
+}
+
+@media print {
+    .inference-comparison-table {
+        page-break-inside: avoid;
+    }
+
+    .inference-comparison-table tbody tr {
+        page-break-inside: avoid;
+    }
+}

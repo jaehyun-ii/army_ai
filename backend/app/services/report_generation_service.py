@@ -45,8 +45,10 @@ class ReportGenerationService:
 
         try:
             from weasyprint import HTML, CSS
+            from weasyprint.text.fonts import FontConfiguration
             self._HTML = HTML
             self._CSS = CSS
+            self._FontConfiguration = FontConfiguration
             self._weasyprint_available = True
             logger.info("WeasyPrint 사용 가능")
         except ImportError:
@@ -113,18 +115,35 @@ class ReportGenerationService:
         # Determine dimension and load dataset
         dimension = getattr(eval_run, "dimension", "2d") or "2d"
         dataset = None
+        attack_dataset = None
 
         if dimension == "3d":
             if eval_run.base_dataset_3d_id:
                 from sqlalchemy import select
-                from app.models.dataset_3d import Dataset3D
+                from app.models.dataset_3d import Dataset3D, AttackDataset3D
                 dataset_row = await db.execute(
                     select(Dataset3D).where(Dataset3D.id == eval_run.base_dataset_3d_id, Dataset3D.deleted_at.is_(None))
                 )
                 dataset = dataset_row.scalar_one_or_none()
+            # Load attack dataset if present
+            if eval_run.attack_dataset_3d_id:
+                from sqlalchemy import select
+                from app.models.dataset_3d import AttackDataset3D
+                attack_dataset_row = await db.execute(
+                    select(AttackDataset3D).where(AttackDataset3D.id == eval_run.attack_dataset_3d_id, AttackDataset3D.deleted_at.is_(None))
+                )
+                attack_dataset = attack_dataset_row.scalar_one_or_none()
         else:
             if eval_run.base_dataset_id:
                 dataset = await crud.dataset_2d.get(db, id=eval_run.base_dataset_id)
+            # Load attack dataset if present
+            if eval_run.attack_dataset_id:
+                from sqlalchemy import select
+                from app.models.dataset_2d import AttackDataset2D
+                attack_dataset_row = await db.execute(
+                    select(AttackDataset2D).where(AttackDataset2D.id == eval_run.attack_dataset_id, AttackDataset2D.deleted_at.is_(None))
+                )
+                attack_dataset = attack_dataset_row.scalar_one_or_none()
 
 
         # Determine evaluation type (attack vs base)
@@ -134,7 +153,7 @@ class ReportGenerationService:
 
         # 3. 보고서 데이터 구성
         report_data = await self._prepare_report_data(
-            db, eval_run, model, dataset, include_charts, dimension, is_attack_evaluation
+            db, eval_run, model, dataset, include_charts, dimension, is_attack_evaluation, attack_dataset
         )
 
         # 4. HTML 템플릿 로드 및 치환 (평가 유형에 따라 템플릿 선택)
@@ -145,9 +164,13 @@ class ReportGenerationService:
         output_filename = f"evaluation_{evaluation_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         output_path = self.reports_dir / output_filename
 
+        # FontConfiguration 생성 (한글 폰트 지원)
+        font_config = self._FontConfiguration()
+
         self._HTML(string=html_content, base_url=str(self.template_dir)).write_pdf(
             str(output_path),
-            stylesheets=[self._CSS(filename=str(self.style_path))]
+            stylesheets=[self._CSS(filename=str(self.style_path))],
+            font_config=font_config
         )
 
         logger.info(f"보고서 생성 완료: {output_path}")
@@ -167,7 +190,8 @@ class ReportGenerationService:
         dataset: Any,
         include_charts: bool,
         dimension: str = "2d",
-        is_attack_evaluation: bool = True
+        is_attack_evaluation: bool = True,
+        attack_dataset: Any = None
     ) -> Dict[str, Any]:
         """보고서 데이터 준비"""
 
@@ -195,10 +219,22 @@ class ReportGenerationService:
             attacked_metrics = {}
             robustness_metrics = {}
 
-        # Extract attack method from params
+        # Extract attack method from attack_dataset or params
         attack_method = 'N/A'
         attack_params = {}
-        if eval_run.params:
+        if attack_dataset:
+            # Get attack info from attack dataset
+            if hasattr(attack_dataset, 'parameters') and attack_dataset.parameters:
+                attack_params = attack_dataset.parameters
+                attack_method = attack_params.get('attack_method', 'N/A')
+            # Fallback to attack_type for 2D attack datasets
+            if attack_method == 'N/A' and hasattr(attack_dataset, 'attack_type'):
+                attack_method = attack_dataset.attack_type
+            # Fallback to method for 3D attack datasets
+            if attack_method == 'N/A' and hasattr(attack_dataset, 'method'):
+                attack_method = attack_dataset.method
+        elif eval_run.params:
+            # Fallback to eval_run params
             attack_method = eval_run.params.get('attack_method', 'N/A')
             attack_params = eval_run.params.get('attack_params', {})
 
@@ -210,27 +246,53 @@ class ReportGenerationService:
         dataset_name = dataset.name if dataset else 'N/A'
         total_images = 'N/A'
         if dataset:
+            # Try multiple sources for image count
             if hasattr(dataset, 'image_count') and dataset.image_count:
                 total_images = str(dataset.image_count)
             elif hasattr(dataset, 'metadata_') and dataset.metadata_ and 'image_count' in dataset.metadata_:
                 total_images = str(dataset.metadata_['image_count'])
+            elif hasattr(dataset, 'images') and dataset.images is not None:
+                # Count from images relationship
+                try:
+                    total_images = str(len([img for img in dataset.images if img.deleted_at is None]))
+                except Exception as e:
+                    logger.debug(f"Failed to count images from relationship: {e}")
+
+        # Extract target class info
+        target_class = 'All Classes'
+        if attack_dataset and hasattr(attack_dataset, 'target_class') and attack_dataset.target_class:
+            target_class = attack_dataset.target_class
+        elif attack_params and 'target_class' in attack_params:
+            target_class = attack_params.get('target_class', 'All Classes')
+
+        # Extract dataset classes (보유 클래스 목록)
+        dataset_classes = 'N/A'
+        if dataset and hasattr(dataset, 'metadata_') and dataset.metadata_ and 'classes' in dataset.metadata_:
+            # Get from dataset metadata
+            dataset_classes = ', '.join(dataset.metadata_['classes'])
+        elif model and model.labelmap:
+            # Fallback to model labelmap
+            dataset_classes = ', '.join(list(model.labelmap.values()))
+
+        # Extract hyperparameters (formatted by attack method)
+        hyperparameters = self._format_hyperparameters(attack_method, attack_params)
 
         # 기본 정보
         data = {
             # 표지
             'EXPERIMENT_DATE': eval_run.created_at.strftime('%Y-%m-%d') if eval_run.created_at else datetime.now().strftime('%Y-%m-%d'),
             'EXPERIMENTER_NAME': 'AI Security Team',
-            'SYSTEM_NAME': 'Army AI Defense System',
-            'REPORT_VERSION': 'v1.0',
+            'SYSTEM_NAME': model.name if model else 'Unknown Model',
+            'CLEAN_DATASET_NAME': dataset_name,
+            'ATTACK_DATASET_NAME': attack_dataset.name if attack_dataset else '-',
             'REPORT_GENERATION_DATE': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
 
             # 모델 정보
             'MODEL_NAME': model.name if model else 'Unknown Model',
-            'MODEL_ARCHITECTURE': model.architecture if model and hasattr(model, 'architecture') else 'N/A',
-            'MODEL_SIZE': f"{model.file_size_mb:.1f}MB" if model and hasattr(model, 'file_size_mb') and model.file_size_mb else 'N/A',
+            'MODEL_ARCHITECTURE': f"{model.framework.value.upper()}" if model and hasattr(model, 'framework') and model.framework else 'N/A',
             'INPUT_RESOLUTION': input_resolution,
             'NUM_CLASSES': str(len(model.labelmap)) if model and model.labelmap else 'N/A',
-            'CLASS_NAMES': ', '.join(list(model.labelmap.values())[:10]) + '...' if model and model.labelmap and len(model.labelmap) > 0 else 'N/A',
+            'CLASS_NAMES': ', '.join(list(model.labelmap.values())) if model and model.labelmap and len(model.labelmap) > 0 else 'N/A',
             'INFERENCE_DEVICE': 'GPU (CUDA)' if model and getattr(model, 'device_type', None) == 'cuda' else 'CPU',
             'CONFIDENCE_THRESHOLD': '0.25',  # Default value
 
@@ -238,7 +300,8 @@ class ReportGenerationService:
             'DATASET_NAME': dataset_name,
             'DATASET_DIMENSION': '3D' if dimension == '3d' else '2D',
             'TOTAL_IMAGES': total_images,
-            'TARGET_CLASS': 'All Classes',  # Target class filtering is done at runtime, not stored
+            'DATASET_CLASSES': dataset_classes,
+            'TARGET_CLASS': target_class,
             'ANNOTATION_FORMAT': 'YOLO',
 
             # 공격 정보
@@ -247,10 +310,11 @@ class ReportGenerationService:
             'ATTACK_INTENSITY': 'Medium',
 
             # 실험 환경
-            'GPU_INFO': 'N/A',
-            'BATCH_SIZE': 'N/A',
+            'GPU_INFO': attack_params.get('device', eval_run.params.get('device', 'N/A')) if eval_run.params else 'N/A',
+            'BATCH_SIZE': str(attack_params.get('batch_size', eval_run.params.get('batch_size', 'N/A'))) if eval_run.params else 'N/A',
             'TOTAL_TIME': self._format_duration(eval_run.started_at, eval_run.ended_at) if eval_run.started_at and eval_run.ended_at else 'N/A',
-            'AVG_TIME_PER_IMAGE': 'N/A',
+            'AVG_TIME_PER_IMAGE': self._calculate_avg_time_per_image(eval_run.started_at, eval_run.ended_at, total_images),
+            'HYPERPARAMETERS': hyperparameters,
         }
 
         # 성능 지표
@@ -262,6 +326,13 @@ class ReportGenerationService:
         # 그래프 생성
         if include_charts and self._matplotlib_available:
             await self._generate_charts(db, data, clean_metrics, attacked_metrics, eval_run, is_attack_evaluation)
+
+        # 추론 결과 이미지 생성 (공격 평가인 경우만)
+        if is_attack_evaluation:
+            await self._generate_inference_images(db, data, eval_run)
+        else:
+            data['CLEAN_INFERENCE_IMAGES'] = ''
+            data['ATTACK_INFERENCE_IMAGES'] = ''
 
         # 결론
         data['FINDINGS_TEXT'] = self._generate_findings(clean_metrics, attacked_metrics, robustness_metrics, is_attack_evaluation)
@@ -312,7 +383,7 @@ class ReportGenerationService:
         data['ATTACKED_DETECTION_RATE'] = 'N/A'  # Not tracked
         data['ATTACKED_DETECTION_RATE_NOTE'] = 'N/A'
 
-        # Delta 계산
+        # Delta 계산 (감소율만 표시, 마이너스 제거)
         metric_pairs = [
             ('map50', clean_map50, attacked_map50),
             ('map75', clean_map75, attacked_map75),
@@ -325,9 +396,9 @@ class ReportGenerationService:
         for metric_name, clean_val, attacked_val in metric_pairs:
 
             if clean_val > 0:
-                delta_percent = ((attacked_val - clean_val) / clean_val) * 100
-                data[f'DELTA_{metric_name.upper()}'] = f"{delta_percent:+.1f}%"
-                data[f'DELTA_{metric_name.upper()}_CLASS'] = 'negative' if delta_percent < 0 else 'positive'
+                delta_percent = ((clean_val - attacked_val) / clean_val) * 100
+                data[f'DELTA_{metric_name.upper()}'] = f"{delta_percent:.1f}%"
+                data[f'DELTA_{metric_name.upper()}_CLASS'] = 'negative' if delta_percent > 0 else 'positive'
             else:
                 data[f'DELTA_{metric_name.upper()}'] = 'N/A'
                 data[f'DELTA_{metric_name.upper()}_CLASS'] = ''
@@ -336,7 +407,7 @@ class ReportGenerationService:
         if robustness_metrics:
             delta_map_percent = robustness_metrics.get('drop_percentage', 0)
             robustness_ratio = robustness_metrics.get('robustness_ratio', 1.0)
-            delta_map_percent = ((attacked_map - clean_map) / clean_map) * 100
+            delta_map_percent = ((clean_map - attacked_map) / clean_map) * 100
             robustness_ratio = attacked_map / clean_map if clean_map > 0 else 0.0
         else:
             delta_map_percent = 0.0
@@ -344,11 +415,11 @@ class ReportGenerationService:
 
         if clean_map > 0 or robustness_metrics:
             data['DELTA_MAP_PERCENT'] = f"{delta_map_percent:.1f}%"
-            data['DELTA_MAP_PERCENT_CLASS'] = 'negative' if delta_map_percent < 0 else 'positive'
-            data['DELTA_MAP_PERCENT_EVAL'] = self._get_severity_evaluation(abs(delta_map_percent))
+            data['DELTA_MAP_PERCENT_CLASS'] = 'negative' if delta_map_percent > 0 else 'positive'
+            data['DELTA_MAP_PERCENT_EVAL'] = self._get_severity_evaluation(delta_map_percent)
 
             # ASR (Attack Success Rate) - mAP 50% 이상 감소 시 성공으로 간주
-            asr = min(100, abs(delta_map_percent) * 2) if delta_map_percent < 0 else 0
+            asr = min(100, delta_map_percent * 2) if delta_map_percent > 0 else 0
             data['ASR_VALUE'] = f"{asr:.1f}%"
             data['ASR_CLASS'] = 'negative' if asr > 50 else 'positive'
             data['ASR_EVAL'] = '✓ 매우 효과적인 공격' if asr > 70 else '⚠️ 중간 수준 공격' if asr > 40 else '✗ 낮은 공격 효과'
@@ -482,23 +553,22 @@ class ReportGenerationService:
         width = 0.35
 
         _fig, ax = self._plt.subplots(figsize=(12, 6))
-        bars1 = ax.bar(x - width/2, clean_values, width, label='Clean', color='#4C4CFF', alpha=0.8)
-        bars2 = ax.bar(x + width/2, attacked_values, width, label='Attacked', color='#cc0000', alpha=0.8)
+        bars1 = ax.bar(x - width/2, clean_values, width, label='일반 데이터셋', color='#4C4CFF', alpha=0.8)
+        bars2 = ax.bar(x + width/2, attacked_values, width, label='적대적 공격 데이터셋', color='#cc0000', alpha=0.8)
 
-        # 값 표시
+        # 값 표시 (폰트 크기 2배)
         for bars in [bars1, bars2]:
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
                        f'{height:.3f}',
-                       ha='center', va='bottom', fontsize=9)
+                       ha='center', va='bottom', fontsize=18)
 
-        ax.set_ylabel('Score', fontsize=12)
-        ax.set_title('Clean vs Attacked Performance Comparison', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Score', fontsize=24)
         ax.set_xticks(x)
-        ax.set_xticklabels(metrics_names, fontsize=10)
+        ax.set_xticklabels(metrics_names, fontsize=20)
         ax.set_ylim(0, 1.0)
-        ax.legend(fontsize=11)
+        ax.legend(fontsize=22)
         ax.grid(axis='y', alpha=0.3, linestyle='--')
 
         self._plt.tight_layout()
@@ -619,24 +689,23 @@ class ReportGenerationService:
         # Plot PR curves
         _fig, ax = self._plt.subplots(figsize=(10, 8))
 
-        label_clean = "Clean" if is_attack_evaluation else "Performance"
+        label_clean = "일반 데이터셋" if is_attack_evaluation else "성능"
         ax.plot(base_pr_data['recalls'], base_pr_data['precisions'],
                color='#4C4CFF', linewidth=2, label=f'{label_clean} (AP={base_pr_data["ap"]:.3f})')
         ax.fill_between(base_pr_data['recalls'], base_pr_data['precisions'], alpha=0.1, color='#4C4CFF')
 
         if attack_pr_data:
             ax.plot(attack_pr_data['recalls'], attack_pr_data['precisions'],
-                   color='#cc0000', linewidth=2, label=f'Attacked (AP={attack_pr_data["ap"]:.3f})')
+                   color='#cc0000', linewidth=2, label=f'적대적 공격 데이터셋 (AP={attack_pr_data["ap"]:.3f})')
             ax.fill_between(attack_pr_data['recalls'], attack_pr_data['precisions'], alpha=0.1, color='#cc0000')
 
-        ax.set_xlabel('Recall', fontsize=12)
-        ax.set_ylabel('Precision', fontsize=12)
-        title = 'Precision-Recall Curve Comparison (IoU=0.5)' if is_attack_evaluation else 'Precision-Recall Curve (IoU=0.5)'
-        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_xlabel('재현율 (Recall)', fontsize=24)
+        ax.set_ylabel('정밀도 (Precision)', fontsize=24)
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.05])
         ax.grid(True, alpha=0.3, linestyle='--')
-        ax.legend(loc='upper right', fontsize=11)
+        ax.legend(loc='upper right', fontsize=22)
+        ax.tick_params(axis='both', which='major', labelsize=20)
 
         self._plt.tight_layout()
         self._plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -768,6 +837,523 @@ class ReportGenerationService:
 
         return float(ap)
 
+    async def _generate_inference_images(
+        self,
+        db: AsyncSession,
+        data: Dict[str, Any],
+        eval_run: Any
+    ):
+        """추론 결과 이미지 생성 (원본 5개, 공격 5개)"""
+        from app.schemas.evaluation import EvalDatasetType
+        import base64
+        from io import BytesIO
+        from PIL import Image, ImageDraw, ImageFont
+
+        try:
+            # Get eval items for BASE and ATTACK datasets
+            base_items = await crud.evaluation.get_all_eval_items(
+                db, run_id=eval_run.id, dataset_type=EvalDatasetType.BASE
+            )
+            attack_items = await crud.evaluation.get_all_eval_items(
+                db, run_id=eval_run.id, dataset_type=EvalDatasetType.ATTACK
+            )
+
+            logger.info(f"BASE 이미지 수: {len(base_items) if base_items else 0}")
+            logger.info(f"ATTACK 이미지 수: {len(attack_items) if attack_items else 0}")
+
+            # Select top 5 images by attack success rate (highest detection drop)
+            top_pairs = self._select_top_attack_success_pairs(base_items, attack_items, top_k=5)
+
+            logger.info(f"선택된 이미지 쌍 수: {len(top_pairs)}")
+
+            # Generate comparison table HTML for paired images
+            comparison_table = self._generate_comparison_table_html_from_pairs(top_pairs)
+
+            data['INFERENCE_COMPARISON_TABLE'] = comparison_table
+
+            logger.info(f"비교 테이블 HTML 길이: {len(comparison_table)}")
+
+        except Exception as e:
+            logger.error(f"추론 이미지 생성 실패: {e}", exc_info=True)
+            data['INFERENCE_COMPARISON_TABLE'] = '<p>이미지 생성 실패</p>'
+
+    def _select_top_attack_success_pairs(self, base_items: List[Any], attack_items: List[Any], top_k: int = 5) -> List[tuple]:
+        """
+        공격 성공률이 높은 상위 K개의 이미지 쌍을 선택
+
+        공격 성공률 = (원본 탐지 개수 - 공격 탐지 개수) / 원본 탐지 개수
+        탐지 개수가 많이 줄어든 순서대로 정렬
+        """
+        # Build attack map by filename
+        attack_map = {}
+        for attack_item in attack_items:
+            attack_filename = self._get_filename(attack_item)
+            if attack_filename:
+                original_filename = None
+                if attack_filename.startswith('adv_'):
+                    original_filename = attack_filename[4:]
+                elif attack_filename.startswith('patched_'):
+                    original_filename = attack_filename[8:]
+
+                if original_filename:
+                    attack_map[original_filename] = attack_item
+
+        # Calculate attack success rate for each pair
+        pairs_with_scores = []
+        for base_item in base_items:
+            base_filename = self._get_filename(base_item)
+            if not base_filename:
+                continue
+
+            attack_item = attack_map.get(base_filename)
+            if not attack_item:
+                continue
+
+            # Count detections
+            base_detections = len(base_item.prediction) if base_item.prediction else 0
+            attack_detections = len(attack_item.prediction) if attack_item.prediction else 0
+
+            # Calculate success rate (higher is better for attack)
+            if base_detections > 0:
+                success_rate = (base_detections - attack_detections) / base_detections
+                detection_drop = base_detections - attack_detections
+            else:
+                # If no base detections, success rate is 0
+                success_rate = 0
+                detection_drop = 0
+
+            pairs_with_scores.append({
+                'base_item': base_item,
+                'attack_item': attack_item,
+                'base_filename': base_filename,
+                'base_detections': base_detections,
+                'attack_detections': attack_detections,
+                'success_rate': success_rate,
+                'detection_drop': detection_drop
+            })
+
+        # Sort by detection drop (absolute number) first, then by success rate
+        pairs_with_scores.sort(key=lambda x: (x['detection_drop'], x['success_rate']), reverse=True)
+
+        # Select top K
+        top_pairs = pairs_with_scores[:top_k]
+
+        # Log selected pairs
+        logger.info(f"=== 공격 성공률 상위 {len(top_pairs)}개 이미지 쌍 ===")
+        for i, pair in enumerate(top_pairs):
+            logger.info(f"#{i+1}: {pair['base_filename']} - "
+                       f"탐지 개수 {pair['base_detections']} -> {pair['attack_detections']} "
+                       f"(감소: {pair['detection_drop']}, 성공률: {pair['success_rate']:.1%})")
+
+        return [(p['base_item'], p['attack_item']) for p in top_pairs]
+
+    def _generate_comparison_table_html_from_pairs(self, pairs: List[tuple]) -> str:
+        """이미지 쌍 리스트로부터 비교 테이블 HTML 생성"""
+        from PIL import Image, ImageDraw, ImageFont
+        import base64
+        from io import BytesIO
+
+        if not pairs:
+            return '<p>비교할 이미지가 없습니다.</p>'
+
+        html_parts = []
+        html_parts.append('<table class="inference-comparison-table">')
+        html_parts.append('<thead><tr><th>순위</th><th>원본 이미지 (Clean)</th><th>공격 이미지 (Adversarial)</th><th>탐지 변화</th></tr></thead>')
+        html_parts.append('<tbody>')
+
+        for idx, (base_item, attack_item) in enumerate(pairs):
+            try:
+                base_filename = self._get_filename(base_item)
+
+                # Count detections for info
+                base_detections = len(base_item.prediction) if base_item.prediction else 0
+                attack_detections = len(attack_item.prediction) if attack_item.prediction else 0
+                detection_drop = base_detections - attack_detections
+                success_rate = (detection_drop / base_detections * 100) if base_detections > 0 else 0
+
+                # Generate base image with bounding boxes
+                base_img_html = self._generate_single_inference_image(base_item, idx, "clean")
+                # Generate attack image with bounding boxes
+                attack_img_html = self._generate_single_inference_image(attack_item, idx, "attack")
+
+                if base_img_html and attack_img_html:
+                    # Generate detection change info
+                    change_html = f'''
+                    <div style="text-align: center; padding: 10px;">
+                        <div style="font-size: 14pt; font-weight: bold; margin-bottom: 10px;">
+                            {base_detections} → {attack_detections}
+                        </div>
+                        <div style="font-size: 11pt; color: #cc0000; font-weight: bold;">
+                            감소: {detection_drop}개 ({success_rate:.0f}%)
+                        </div>
+                    </div>
+                    '''
+
+                    html_parts.append('<tr>')
+                    html_parts.append(f'<td class="image-number">#{idx + 1}</td>')
+                    html_parts.append(f'<td class="image-cell">{base_img_html}</td>')
+                    html_parts.append(f'<td class="image-cell">{attack_img_html}</td>')
+                    html_parts.append(f'<td class="change-cell">{change_html}</td>')
+                    html_parts.append('</tr>')
+                    logger.info(f"이미지 쌍 {idx + 1} 생성 완료: {base_filename} (탐지: {base_detections} → {attack_detections})")
+
+            except Exception as e:
+                logger.error(f"이미지 쌍 {idx + 1} 생성 실패: {e}", exc_info=True)
+                continue
+
+        html_parts.append('</tbody></table>')
+
+        logger.info(f"총 {len(pairs)}개의 이미지 쌍 테이블 생성 완료")
+        return ''.join(html_parts)
+
+    def _generate_comparison_table_html(self, base_items: List[Any], attack_items: List[Any]) -> str:
+        """원본과 공격 이미지 쌍을 테이블 형식으로 비교하는 HTML 생성"""
+        from PIL import Image, ImageDraw, ImageFont
+        import base64
+        from io import BytesIO
+
+        html_parts = []
+        html_parts.append('<table class="inference-comparison-table">')
+        html_parts.append('<thead><tr><th>이미지 번호</th><th>원본 이미지 (Clean)</th><th>공격 이미지 (Adversarial)</th></tr></thead>')
+        html_parts.append('<tbody>')
+
+        # Build a mapping from attack items by their original filename
+        # Attack filenames are: adv_<original> or patched_<original>
+        attack_map = {}
+        for attack_item in attack_items:
+            attack_filename = self._get_filename(attack_item)
+            if attack_filename:
+                # Remove 'adv_' or 'patched_' prefix to get original filename
+                original_filename = None
+                if attack_filename.startswith('adv_'):
+                    original_filename = attack_filename[4:]  # Remove 'adv_'
+                elif attack_filename.startswith('patched_'):
+                    original_filename = attack_filename[8:]  # Remove 'patched_'
+
+                if original_filename:
+                    attack_map[original_filename] = attack_item
+                    logger.debug(f"Attack 매핑: {original_filename} -> {attack_filename}")
+
+        logger.info(f"총 {len(attack_map)}개의 공격 이미지 매핑 완료")
+
+        # Match base items with attack items by filename
+        pair_count = 0
+        for idx, base_item in enumerate(base_items):
+            base_filename = self._get_filename(base_item)
+            if not base_filename:
+                logger.warning(f"Base item {idx}의 파일명을 찾을 수 없음")
+                continue
+
+            # Find matching attack item
+            attack_item = attack_map.get(base_filename)
+            if not attack_item:
+                logger.warning(f"원본 이미지 '{base_filename}'에 대응하는 공격 이미지를 찾을 수 없음")
+                continue
+
+            try:
+                # Generate base image with bounding boxes
+                base_img_html = self._generate_single_inference_image(base_item, idx, "clean")
+                # Generate attack image with bounding boxes
+                attack_img_html = self._generate_single_inference_image(attack_item, idx, "attack")
+
+                if base_img_html and attack_img_html:
+                    pair_count += 1
+                    html_parts.append('<tr>')
+                    html_parts.append(f'<td class="image-number">#{pair_count}</td>')
+                    html_parts.append(f'<td class="image-cell">{base_img_html}</td>')
+                    html_parts.append(f'<td class="image-cell">{attack_img_html}</td>')
+                    html_parts.append('</tr>')
+                    logger.info(f"이미지 쌍 {pair_count} 생성 완료: {base_filename}")
+
+            except Exception as e:
+                logger.error(f"이미지 쌍 생성 실패 ({base_filename}): {e}", exc_info=True)
+                continue
+
+        html_parts.append('</tbody></table>')
+
+        logger.info(f"총 {pair_count}개의 이미지 쌍 테이블 생성 완료")
+        return ''.join(html_parts) if pair_count > 0 else '<p>비교할 이미지가 없습니다.</p>'
+
+    def _get_filename(self, item: Any) -> Optional[str]:
+        """eval_item으로부터 파일명 추출"""
+        try:
+            if hasattr(item, 'image_2d') and item.image_2d:
+                return item.image_2d.file_name
+            elif hasattr(item, 'image_3d') and item.image_3d:
+                return item.image_3d.file_name
+            else:
+                return None
+        except Exception as e:
+            logger.warning(f"파일명 추출 실패: {e}")
+            return None
+
+    def _generate_single_inference_image(self, item: Any, idx: int, dataset_type: str) -> Optional[str]:
+        """단일 eval_item으로부터 바운딩 박스가 그려진 이미지 HTML 생성"""
+        from PIL import Image, ImageDraw, ImageFont
+        import base64
+        from io import BytesIO
+
+        try:
+            # Get image path
+            image_path = None
+            if hasattr(item, 'image_2d') and item.image_2d:
+                # storage_key may already include the filename, so check both possibilities
+                image_path = Path(settings.STORAGE_ROOT) / item.image_2d.storage_key
+                if not image_path.exists():
+                    # Try appending filename if storage_key is just the directory
+                    image_path = Path(settings.STORAGE_ROOT) / item.image_2d.storage_key / item.image_2d.file_name
+                logger.debug(f"{dataset_type} Image {idx}: 2D 이미지 경로 = {image_path}")
+            elif hasattr(item, 'image_3d') and item.image_3d:
+                # storage_key may already include the filename, so check both possibilities
+                image_path = Path(settings.STORAGE_ROOT) / item.image_3d.storage_key
+                if not image_path.exists():
+                    # Try appending filename if storage_key is just the directory
+                    image_path = Path(settings.STORAGE_ROOT) / item.image_3d.storage_key / item.image_3d.file_name
+                logger.debug(f"{dataset_type} Image {idx}: 3D 이미지 경로 = {image_path}")
+            else:
+                logger.warning(f"{dataset_type} Image {idx}: image_2d와 image_3d 모두 없음")
+                return None
+
+            if not image_path or not image_path.exists():
+                logger.warning(f"{dataset_type} Image {idx}: 파일이 존재하지 않음 - {image_path}")
+                return None
+
+            # Load image
+            img = Image.open(image_path).convert('RGB')
+            draw = ImageDraw.Draw(img)
+            logger.debug(f"{dataset_type} Image {idx}: 이미지 로드 성공, 크기 = {img.size}")
+
+            # Draw predictions
+            pred_count = 0
+            if item.prediction is not None and len(item.prediction) > 0:
+                logger.debug(f"{dataset_type} Image {idx}: Processing {len(item.prediction)} predictions")
+
+                # Load font once
+                try:
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+                except Exception as font_error:
+                    logger.debug(f"Failed to load TrueType font: {font_error}, using default")
+                    font = ImageFont.load_default()
+
+                for pred_idx, pred in enumerate(item.prediction):
+                    try:
+                        # Handle both dict and object types
+                        if isinstance(pred, dict):
+                            bbox = pred.get('bbox', {})
+                            class_name = pred.get('class_name', 'unknown')
+                            conf = pred.get('confidence', 0)
+                        else:
+                            bbox = getattr(pred, 'bbox', {})
+                            class_name = getattr(pred, 'class_name', 'unknown')
+                            conf = getattr(pred, 'confidence', 0)
+
+                        if not bbox:
+                            logger.debug(f"{dataset_type} Image {idx} Pred {pred_idx}: No bbox found")
+                            continue
+
+                        # Convert bbox to dict if it's an object
+                        if not isinstance(bbox, dict):
+                            if hasattr(bbox, '__dict__'):
+                                bbox = bbox.__dict__
+                            elif hasattr(bbox, 'model_dump'):
+                                bbox = bbox.model_dump()
+                            else:
+                                logger.warning(f"{dataset_type} Image {idx} Pred {pred_idx}: Cannot convert bbox to dict")
+                                continue
+
+                        img_width, img_height = img.size
+
+                        # Determine bbox format and convert to absolute x1, y1, x2, y2
+                        if 'x_center' in bbox and 'y_center' in bbox:
+                            # YOLO format (normalized x_center, y_center, width, height)
+                            x_center = float(bbox.get('x_center', 0))
+                            y_center = float(bbox.get('y_center', 0))
+                            width = float(bbox.get('width', 0))
+                            height = float(bbox.get('height', 0))
+
+                            x1 = int((x_center - width / 2) * img_width)
+                            y1 = int((y_center - height / 2) * img_height)
+                            x2 = int((x_center + width / 2) * img_width)
+                            y2 = int((y_center + height / 2) * img_height)
+
+                        elif 'x1' in bbox and 'y1' in bbox and 'x2' in bbox and 'y2' in bbox:
+                            # BBox format (x1, y1, x2, y2) - may be normalized or absolute
+                            x1_val = float(bbox.get('x1', 0))
+                            y1_val = float(bbox.get('y1', 0))
+                            x2_val = float(bbox.get('x2', 0))
+                            y2_val = float(bbox.get('y2', 0))
+
+                            # Check if normalized (values between 0 and 1)
+                            if 0 <= x1_val <= 1 and 0 <= y1_val <= 1 and 0 <= x2_val <= 1 and 0 <= y2_val <= 1:
+                                x1 = int(x1_val * img_width)
+                                y1 = int(y1_val * img_height)
+                                x2 = int(x2_val * img_width)
+                                y2 = int(y2_val * img_height)
+                            else:
+                                # Already absolute coordinates
+                                x1 = int(x1_val)
+                                y1 = int(y1_val)
+                                x2 = int(x2_val)
+                                y2 = int(y2_val)
+                        else:
+                            logger.warning(f"{dataset_type} Image {idx} Pred {pred_idx}: Unknown bbox format: {bbox.keys()}")
+                            continue
+
+                        # Ensure coordinates are within image bounds
+                        x1 = max(0, min(x1, img_width - 1))
+                        y1 = max(0, min(y1, img_height - 1))
+                        x2 = max(0, min(x2, img_width - 1))
+                        y2 = max(0, min(y2, img_height - 1))
+
+                        # Skip invalid boxes
+                        if x2 <= x1 or y2 <= y1:
+                            logger.debug(f"{dataset_type} Image {idx} Pred {pred_idx}: Invalid box dimensions")
+                            continue
+
+                        # Draw rectangle
+                        draw.rectangle([x1, y1, x2, y2], outline='red', width=3)
+
+                        # Add label with background
+                        label = f"{class_name} {conf:.2f}"
+
+                        # Calculate label position (above the box if possible)
+                        label_y = y1 - 20 if y1 >= 20 else y1 + 5
+
+                        # Get text bounding box
+                        try:
+                            bbox_label = draw.textbbox((x1, label_y), label, font=font)
+                            draw.rectangle(bbox_label, fill='red')
+                            draw.text((x1, label_y), label, fill='white', font=font)
+                        except Exception as text_error:
+                            # Fallback: just draw text without background
+                            logger.debug(f"Text rendering error: {text_error}")
+                            draw.text((x1, label_y), label, fill='red', font=font)
+
+                        pred_count += 1
+
+                    except Exception as pred_error:
+                        logger.warning(f"{dataset_type} Image {idx} Pred {pred_idx}: Error processing prediction: {pred_error}")
+                        continue
+            else:
+                logger.debug(f"{dataset_type} Image {idx}: No predictions to draw")
+
+            logger.debug(f"{dataset_type} Image {idx}: {pred_count}개의 바운딩 박스 그림")
+
+            # Convert to base64
+            buffered = BytesIO()
+            img.save(buffered, format="JPEG", quality=85)
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+
+            # Create HTML with detection count
+            html = f'''
+            <div class="inference-image-container">
+                <img src="data:image/jpeg;base64,{img_str}" alt="{dataset_type} Image {idx + 1}">
+                <div class="detection-count">탐지 객체: {pred_count}개</div>
+            </div>
+            '''
+            logger.debug(f"{dataset_type} Image {idx}: HTML 생성 완료")
+            return html
+
+        except Exception as e:
+            logger.error(f"{dataset_type} Image {idx} 생성 실패: {e}", exc_info=True)
+            return None
+
+    def _generate_inference_html(self, eval_items: List[Any], dataset_type: str) -> str:
+        """eval_items로부터 추론 결과 HTML 생성"""
+        from PIL import Image, ImageDraw
+        import base64
+        from io import BytesIO
+
+        html_parts = []
+
+        logger.info(f"{dataset_type}: 처리할 eval_items 수: {len(eval_items)}")
+
+        for idx, item in enumerate(eval_items):
+            try:
+                # Get image path
+                image_path = None
+                if hasattr(item, 'image_2d') and item.image_2d:
+                    # storage_key may already include the filename, so check both possibilities
+                    image_path = Path(settings.STORAGE_ROOT) / item.image_2d.storage_key
+                    if not image_path.exists():
+                        # Try appending filename if storage_key is just the directory
+                        image_path = Path(settings.STORAGE_ROOT) / item.image_2d.storage_key / item.image_2d.file_name
+                    logger.info(f"{dataset_type} Image {idx}: 2D 이미지 경로 = {image_path}")
+                elif hasattr(item, 'image_3d') and item.image_3d:
+                    # storage_key may already include the filename, so check both possibilities
+                    image_path = Path(settings.STORAGE_ROOT) / item.image_3d.storage_key
+                    if not image_path.exists():
+                        # Try appending filename if storage_key is just the directory
+                        image_path = Path(settings.STORAGE_ROOT) / item.image_3d.storage_key / item.image_3d.file_name
+                    logger.info(f"{dataset_type} Image {idx}: 3D 이미지 경로 = {image_path}")
+                else:
+                    logger.warning(f"{dataset_type} Image {idx}: image_2d와 image_3d 모두 없음")
+
+                if not image_path:
+                    logger.warning(f"{dataset_type} Image {idx}: image_path가 None")
+                    continue
+
+                if not image_path.exists():
+                    logger.warning(f"{dataset_type} Image {idx}: 파일이 존재하지 않음 - {image_path}")
+                    continue
+
+                # Load image
+                img = Image.open(image_path).convert('RGB')
+                draw = ImageDraw.Draw(img)
+                logger.info(f"{dataset_type} Image {idx}: 이미지 로드 성공, 크기 = {img.size}")
+
+                # Draw predictions
+                pred_count = 0
+                if item.prediction:
+                    for pred in item.prediction:
+                        bbox = pred.get('bbox', {})
+                        if bbox:
+                            # Parse bbox (assuming normalized coordinates)
+                            x_center = bbox.get('x_center', 0)
+                            y_center = bbox.get('y_center', 0)
+                            width = bbox.get('width', 0)
+                            height = bbox.get('height', 0)
+
+                            # Convert to absolute coordinates
+                            img_width, img_height = img.size
+                            x1 = int((x_center - width / 2) * img_width)
+                            y1 = int((y_center - height / 2) * img_height)
+                            x2 = int((x_center + width / 2) * img_width)
+                            y2 = int((y_center + height / 2) * img_height)
+
+                            # Draw rectangle
+                            draw.rectangle([x1, y1, x2, y2], outline='red', width=2)
+
+                            # Add label
+                            class_name = pred.get('class_name', '')
+                            conf = pred.get('confidence', 0)
+                            label = f"{class_name} {conf:.2f}"
+                            draw.text((x1, y1 - 10), label, fill='red')
+                            pred_count += 1
+
+                logger.info(f"{dataset_type} Image {idx}: {pred_count}개의 바운딩 박스 그림")
+
+                # Convert to base64
+                buffered = BytesIO()
+                img.save(buffered, format="JPEG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+
+                # Create HTML
+                html_parts.append(f'''
+                <div class="inference-item">
+                    <img src="data:image/jpeg;base64,{img_str}" alt="Image {idx + 1}">
+                    <div class="caption">Image {idx + 1}</div>
+                </div>
+                ''')
+                logger.info(f"{dataset_type} Image {idx}: HTML 생성 완료")
+
+            except Exception as e:
+                logger.error(f"{dataset_type} Image {idx} 생성 실패: {e}", exc_info=True)
+                continue
+
+        logger.info(f"{dataset_type}: 총 {len(html_parts)}개의 이미지 HTML 생성됨")
+        return ''.join(html_parts) if html_parts else '<p>이미지 없음</p>'
+
     def _fill_template(self, data: Dict[str, Any], template_path: Path = None) -> str:
         """템플릿 치환"""
         if template_path is None:
@@ -828,6 +1414,84 @@ class ReportGenerationService:
         return descriptions.get(attack_method.lower(), f'{attack_method} 공격 기법')
 
     @staticmethod
+    def _format_hyperparameters(attack_method: str, attack_params: Dict) -> str:
+        """공격 기법별 하이퍼파라미터 포맷팅"""
+        if not attack_params:
+            return 'N/A'
+
+        method = attack_method.lower()
+        params_list = []
+
+        # Define important parameters for each attack method
+        if method in ['pgd', 'fgsm']:
+            # Gradient-based attacks
+            if 'eps' in attack_params:
+                params_list.append(f"Epsilon: {attack_params['eps']}")
+            if 'eps_step' in attack_params:
+                params_list.append(f"Step Size: {attack_params['eps_step']}")
+            if 'max_iter' in attack_params:
+                params_list.append(f"Iterations: {attack_params['max_iter']}")
+            if 'norm' in attack_params:
+                params_list.append(f"Norm: L{attack_params['norm']}")
+
+        elif method in ['patch', 'dpatch', 'robust_dpatch']:
+            # Patch-based attacks
+            if 'patch_shape' in attack_params:
+                shape = attack_params['patch_shape']
+                if isinstance(shape, (list, tuple)) and len(shape) >= 2:
+                    params_list.append(f"Patch Size: {shape[0]}×{shape[1]}")
+            if 'learning_rate' in attack_params:
+                params_list.append(f"Learning Rate: {attack_params['learning_rate']}")
+            if 'max_iter' in attack_params:
+                params_list.append(f"Iterations: {attack_params['max_iter']}")
+            if method == 'robust_dpatch':
+                if 'crop_range' in attack_params:
+                    params_list.append(f"Crop Range: {attack_params['crop_range']}")
+                if 'brightness_range' in attack_params:
+                    params_list.append(f"Brightness Range: {attack_params['brightness_range']}")
+
+        elif method == 'universal_noise':
+            # Universal noise attack
+            if 'eps' in attack_params:
+                params_list.append(f"Epsilon: {attack_params['eps']}")
+            if 'eps_step' in attack_params:
+                params_list.append(f"Step Size: {attack_params['eps_step']}")
+            if 'max_iter' in attack_params:
+                params_list.append(f"Iterations: {attack_params['max_iter']}")
+
+        elif method == 'noise_osfd':
+            # Noise OSFD attack
+            if 'eps' in attack_params:
+                params_list.append(f"Epsilon: {attack_params['eps']}")
+            if 'eps_step' in attack_params:
+                params_list.append(f"Step Size: {attack_params['eps_step']}")
+            if 'max_iter' in attack_params:
+                params_list.append(f"Iterations: {attack_params['max_iter']}")
+            if 'amplification_factor' in attack_params:
+                params_list.append(f"Amplification Factor: {attack_params['amplification_factor']}")
+
+        elif method == 'naturalistic':
+            # Naturalistic (NAP) attack
+            if 'learning_rate' in attack_params:
+                params_list.append(f"Learning Rate: {attack_params['learning_rate']}")
+            if 'max_iter' in attack_params:
+                params_list.append(f"Iterations: {attack_params['max_iter']}")
+            if 'patch_scale' in attack_params:
+                params_list.append(f"Patch Scale: {attack_params['patch_scale']}")
+            if 'gan_class_id' in attack_params:
+                params_list.append(f"GAN Class ID: {attack_params['gan_class_id']}")
+
+        # If no specific params found, show general params (excluding meta params)
+        if not params_list:
+            exclude_keys = {'attack_method', 'device', 'batch_size', 'target_class',
+                          'summary_writer', 'verbose', 'estimator', 'return_perturbation'}
+            for key, value in attack_params.items():
+                if key not in exclude_keys and not key.startswith('_'):
+                    params_list.append(f"{key}: {value}")
+
+        return ', '.join(params_list) if params_list else 'N/A'
+
+    @staticmethod
     def _get_performance_note(attacked_value: float, clean_value: float) -> str:
         """성능 변화 노트"""
         if clean_value == 0:
@@ -877,6 +1541,28 @@ class ReportGenerationService:
             hours = total_seconds // 3600
             minutes = (total_seconds % 3600) // 60
             return f"{hours}시간 {minutes}분"
+
+    @staticmethod
+    def _calculate_avg_time_per_image(started_at, ended_at, total_images) -> str:
+        """Calculate average time per image"""
+        if not started_at or not ended_at or not total_images or total_images == 'N/A':
+            return 'N/A'
+
+        try:
+            num_images = int(total_images)
+            if num_images == 0:
+                return 'N/A'
+
+            duration = ended_at - started_at
+            total_seconds = duration.total_seconds()
+            avg_seconds = total_seconds / num_images
+
+            if avg_seconds < 1:
+                return f"{avg_seconds * 1000:.1f}ms"
+            else:
+                return f"{avg_seconds:.2f}초"
+        except (ValueError, TypeError):
+            return 'N/A'
 
     @staticmethod
     def _generate_findings(clean_metrics: Dict, attacked_metrics: Dict, robustness_metrics: Dict = None, is_attack_evaluation: bool = True) -> str:

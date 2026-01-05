@@ -386,6 +386,13 @@ class NoiseAttackService:
                     except Exception as e:
                         logger.warning(f"Failed to send training progress via SSE: {e}")
 
+                # Attack loss configuration is now handled automatically by
+                # UniversalNoiseAttackPyTorch.__init__() via _configure_attack_loss()
+                # No need to mutate estimator's private fields here!
+                await sse_logger.info(
+                    "Attack Loss가 자동으로 활성화됩니다 (DetectionAttackLoss)"
+                )
+
                 attack = UniversalNoiseAttackPyTorch(
                     estimator=estimator,
                     eps=eps_normalized / 255.0,
@@ -402,7 +409,7 @@ class NoiseAttackService:
                 await sse_logger.info(
                     f"Universal Noise Attack 생성 (PyTorch): epsilon={epsilon}, "
                     f"step_size={alpha}, iterations={iterations}, "
-                    f"target_class_id={universal_target_class_id}, pseudo-GT enabled"
+                    f"target_class_id={universal_target_class_id}, pseudo-GT enabled, Attack Loss enabled"
                 )
 
             elif attack_method == "noise_osfd":
@@ -674,7 +681,7 @@ class NoiseAttackService:
             elif attack_method in ["universal_noise", "noise_osfd"] and universal_perturbation is not None:
                 await sse_logger.status(f"{attack_method.upper()}: 학습된 perturbation을 이미지에 적용 중...")
 
-                # Prepare all images for batch application
+                # Prepare all images for batch application (keep in HWC format)
                 x_batch_list = []
                 resize_info_list = []
                 for img_data in images:
@@ -698,25 +705,29 @@ class NoiseAttackService:
                         "original_width": original_w
                     })
 
-                    # Convert to CHW format
-                    x = img.transpose(2, 0, 1).astype(np.float32)
-                    x_batch_list.append(x)
+                    # Keep in HWC format (H, W, C)
+                    x_batch_list.append(img.astype(np.float32))
 
-                x_batch = np.array(x_batch_list)
+                x_batch = np.array(x_batch_list)  # (N, H, W, C)
 
-                # Apply universal perturbation to the entire batch via broadcasting
-                x_adv_batch = x_batch + universal_perturbation
-                if estimator.clip_values is not None:
-                    x_adv_batch = np.clip(x_adv_batch, estimator.clip_values[0], estimator.clip_values[1])
+                # CRITICAL FIX: Use attack.apply_perturbation() with masking
+                # This ensures GT boxes are used for masking (like AEGIS)
+                def apply_with_mask():
+                    # Set the pre-trained perturbation
+                    attack.set_perturbation(universal_perturbation)
+                    # Apply perturbation with masking (generates pseudo-GT automatically)
+                    return attack.apply_perturbation(x=x_batch, y=None, apply_mask=True)
 
-                await sse_logger.info(f"Perturbation applied to batch of {len(x_adv_batch)} images.")
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    x_adv_batch = await loop.run_in_executor(executor, apply_with_mask)
 
-                # Process the results
+                await sse_logger.info(f"Perturbation applied to batch of {len(x_adv_batch)} images with masking.")
+
+                # Process the results (x_adv_batch is already in HWC format)
                 for idx, (x_adv, img_data, resize_info_item) in enumerate(zip(x_adv_batch, images, resize_info_list)):
                     try:
-                        # Convert back to HWC
-                        adv_img = x_adv.transpose(1, 2, 0)
-                        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+                        # x_adv is already in HWC format (H, W, C)
+                        adv_img = np.clip(x_adv, 0, 255).astype(np.uint8)
 
                         # CRITICAL FIX: Resize back to original size if image was resized
                         if resize_info_item["resized"]:

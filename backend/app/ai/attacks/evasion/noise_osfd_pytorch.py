@@ -434,6 +434,12 @@ class NoiseOSFDPyTorch(EvasionAttack):
         self.lr_scheduler_params = lr_scheduler_params if lr_scheduler_params is not None else {}
         self.progress_callback = progress_callback
         self.clip_min, self.clip_max = self._get_clip_bounds()
+        self._input_scale = float(self.estimator.clip_values[1]) if self.estimator.clip_values is not None else 1.0
+        if self._input_scale > 1.0:
+            if self.eps > 1.0:
+                self.eps = self.eps / self._input_scale
+            if self.eps_step > 1.0:
+                self.eps_step = self.eps_step / self._input_scale
         self._check_params()
 
         # Universal perturbation (PyTorch parameter)
@@ -494,8 +500,11 @@ class NoiseOSFDPyTorch(EvasionAttack):
             # Convert y to torch format
             pseudo_gts = []
             for label in y:
+                from app.ai.losses.box_utils import xyxy2xywh
+
+                boxes_xyxy = torch.from_numpy(label['boxes']).float().to(self.device)
                 pseudo_gt = {
-                    'boxes': torch.from_numpy(label['boxes']).float().to(self.device),
+                    'boxes': xyxy2xywh(boxes_xyxy),
                     'labels': torch.from_numpy(label['labels']).long().to(self.device)
                 }
                 pseudo_gts.append(pseudo_gt)
@@ -564,95 +573,74 @@ class NoiseOSFDPyTorch(EvasionAttack):
         # MSE loss function
         mse_loss = nn.MSELoss()
 
-        # Create DataLoader (following PGD PyTorch pattern)
-        dataset = torch.utils.data.TensorDataset(x)
-        data_loader = torch.utils.data.DataLoader(
-            dataset=dataset,
-            batch_size=self.batch_size,
-            shuffle=False,  # Don't shuffle to maintain order
-            drop_last=False
-        )
+        logger.info(f"Training on {len(x)} images (full-batch mode, AEGIS-style)")
 
-        logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
-
-        # Training loop with DataLoader (Type 1: PyTorch DataLoader pattern)
+        # Training loop - AEGIS style: process ALL data each iteration (no DataLoader)
+        # This ensures consistent gradient aggregation across all samples
         for i_iter in trange(self.max_iter, desc="OSFD Training", disable=not self.verbose):
-            epoch_loss = 0.0
-            epoch_layer_losses = {layer_idx: 0.0 for layer_idx in self.feature_layer_indices}
+            # Extract benign features for ALL images at once (no gradients needed)
+            with torch.no_grad():
+                benign_features = self._feature_extractor(x)
 
-            # Process batches using DataLoader
-            for batch_id, (x_batch,) in enumerate(data_loader):
-                # Move batch to device
-                x_batch = x_batch.to(self.device)
+            # Apply perturbation to ALL images
+            x_adv = torch.clamp(x + self._perturbation_torch, self.clip_min, self.clip_max)
 
-                # Extract benign features (no gradients needed)
-                with torch.no_grad():
-                    benign_features = self._feature_extractor(x_batch)
+            # Apply augmentation for robustness (ALL images at once)
+            if self.apply_augmentation and self._augmentation is not None:
+                x_adv_aug = self._augmentation(x_adv)
+            else:
+                x_adv_aug = x_adv
 
-                # Apply perturbation (broadcast to batch)
-                x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, self.clip_min, self.clip_max)
+            # Extract adversarial features (with gradients, ALL images)
+            adv_features = self._feature_extractor(x_adv_aug)
 
-                # Apply augmentation for robustness
-                if self.apply_augmentation and self._augmentation is not None:
-                    x_adv_aug_batch = self._augmentation(x_adv_batch)
-                else:
-                    x_adv_aug_batch = x_adv_batch
+            # Compute OSFD loss: maximize MSE between adversarial and amplified benign features
+            total_loss = torch.tensor(0.0, device=self.device)
+            layer_losses = {}
 
-                # Extract adversarial features (with gradients)
-                adv_features = self._feature_extractor(x_adv_aug_batch)
+            for layer_idx in self.feature_layer_indices:
+                if layer_idx not in benign_features or layer_idx not in adv_features:
+                    logger.warning(f"Layer {layer_idx} not found in features, skipping")
+                    continue
 
-                # Compute OSFD loss: maximize MSE between adversarial and amplified benign features
-                total_loss = torch.tensor(0.0, device=self.device)
-                layer_losses = {}
+                # Target: amplified benign features
+                target_features = self.amplification_factor * benign_features[layer_idx].detach()
+                adv_feat = adv_features[layer_idx]
 
-                for layer_idx in self.feature_layer_indices:
-                    if layer_idx not in benign_features or layer_idx not in adv_features:
-                        logger.warning(f"Layer {layer_idx} not found in features, skipping")
-                        continue
-
-                    # Target: amplified benign features
-                    target_features = self.amplification_factor * benign_features[layer_idx].detach()
-                    adv_feat = adv_features[layer_idx]
-
-                    # Handle shape mismatch with interpolation
-                    if adv_feat.shape != target_features.shape:
-                        target_size = target_features.shape[2:]
-                        adv_feat = F.interpolate(
-                            adv_feat,
-                            size=target_size,
-                            mode='bilinear',
-                            align_corners=False
+                # Handle shape mismatch with interpolation
+                if adv_feat.shape != target_features.shape:
+                    target_size = target_features.shape[2:]
+                    adv_feat = F.interpolate(
+                        adv_feat,
+                        size=target_size,
+                        mode='bilinear',
+                        align_corners=False
+                    )
+                    if i_iter == 0:
+                        logger.debug(
+                            f"Resized layer {layer_idx} features from {adv_features[layer_idx].shape} "
+                            f"to {adv_feat.shape}"
                         )
-                        if batch_id == 0 and i_iter == 0:
-                            logger.debug(
-                                f"Resized layer {layer_idx} features from {adv_features[layer_idx].shape} "
-                                f"to {adv_feat.shape}"
-                            )
 
-                    # MSE loss for this layer
-                    layer_loss = mse_loss(adv_feat, target_features)
-                    total_loss += layer_loss
-                    layer_losses[layer_idx] = layer_loss.item()
+                # MSE loss for this layer
+                layer_loss = mse_loss(adv_feat, target_features)
+                total_loss += layer_loss
+                layer_losses[layer_idx] = layer_loss.item()
 
-                # Accumulate epoch losses
-                epoch_loss += total_loss.item()
-                for layer_idx, loss_val in layer_losses.items():
-                    epoch_layer_losses[layer_idx] += loss_val
+            # OSFD maximizes distortion -> minimize negative loss
+            loss_to_backward = -total_loss
 
-                # OSFD maximizes distortion -> minimize negative loss
-                loss_to_backward = -total_loss
+            # Backpropagation
+            optimizer.zero_grad()
+            loss_to_backward.backward()
+            optimizer.step()
 
-                # Backpropagation
-                optimizer.zero_grad()
-                loss_to_backward.backward()
-                optimizer.step()
+            # Enforce epsilon constraint using base class
+            self._enforce_epsilon(self.eps)
 
-                # Enforce epsilon constraint using base class
-                self._enforce_epsilon(self.eps)
-
-            # Average losses over batches
-            avg_epoch_loss = epoch_loss / len(data_loader)
-            avg_layer_losses = {k: v / len(data_loader) for k, v in epoch_layer_losses.items()}
+            # Loss values (no averaging needed, already computed on full dataset)
+            avg_epoch_loss = total_loss.item()
+            avg_layer_losses = layer_losses
 
             # Step the learning rate scheduler
             if scheduler is not None:
@@ -711,11 +699,13 @@ class NoiseOSFDPyTorch(EvasionAttack):
                 continue
 
             boxes = pseudo_gts[i]['boxes'].to(self.device)
+            from app.ai.losses.box_utils import xywh2xyxy
+            boxes_xyxy = xywh2xyxy(boxes)
 
             # Create mask for this image (C, H, W) to match perturbation shape
             mask = torch.zeros(x.shape[1], x.shape[2], x.shape[3], device=self.device, dtype=torch.float32)
 
-            for box in boxes:
+            for box in boxes_xyxy:
                 # Convert box coordinates to integers on CPU (for indexing)
                 box_cpu = box[:4].cpu()
                 x1 = int(box_cpu[0].item())
@@ -770,6 +760,7 @@ class NoiseOSFDPyTorch(EvasionAttack):
         x_torch, _ = self.estimator._preprocess_and_convert_inputs(
             x=x, y=None, fit=False, no_grad=True
         )
+        x_torch = x_torch.to(self.device, dtype=torch.float32)
         logger.debug(f"Input converted to torch: {x_torch.shape}, device: {x_torch.device}")
         return x_torch, x
 
@@ -803,11 +794,9 @@ class NoiseOSFDPyTorch(EvasionAttack):
 
     def _get_clip_bounds(self) -> tuple[float, float]:
         """
-        Determine clipping bounds; fall back to detector-friendly [0, 255].
+        Determine clipping bounds for INTERNAL normalized [0, 1] scale.
         """
-        if self.estimator.clip_values is not None:
-            return float(self.estimator.clip_values[0]), float(self.estimator.clip_values[1])
-        return 0.0, 255.0
+        return 0.0, 1.0
 
     @property
     def perturbation(self) -> np.ndarray | None:
@@ -821,9 +810,15 @@ class NoiseOSFDPyTorch(EvasionAttack):
         Args:
             perturbation: Perturbation to set (NumPy array)
         """
-        self._perturbation = perturbation
+        pert = perturbation
+        abs_max = float(np.nanmax(np.abs(pert))) if pert.size else 0.0
+        if self._input_scale > 1.0 and abs_max > 1.0:
+            pert = pert / self._input_scale
+        if np.isnan(pert).any():
+            pert = np.nan_to_num(pert, nan=0.0, posinf=0.0, neginf=0.0)
+        self._perturbation = pert
         self._perturbation_torch = nn.Parameter(
-            torch.from_numpy(perturbation).float().to(self.device)
+            torch.from_numpy(pert).float().to(self.device)
         )
 
     def _enforce_epsilon(self, eps: float) -> None:
@@ -834,3 +829,96 @@ class NoiseOSFDPyTorch(EvasionAttack):
             return
         # Clamp around 0 since perturbation is additive
         self._perturbation_torch.data = torch.clamp(self._perturbation_torch.data, -eps, eps)
+
+    def _generate_pseudo_gts_for_mask(self, x: np.ndarray) -> list[dict[str, torch.Tensor]]:
+        """
+        Generate pseudo-GT boxes for masking using the estimator predict API.
+        """
+        from app.ai.losses.box_utils import xyxy2xywh
+
+        predictions = self.estimator.predict(x=x)
+        pseudo_gts = []
+
+        for pred in predictions:
+            if 'boxes' not in pred or len(pred['boxes']) == 0:
+                pseudo_gts.append({
+                    'boxes': torch.zeros(0, 4, dtype=torch.float32, device=self.device),
+                    'labels': torch.zeros(0, dtype=torch.int64, device=self.device),
+                })
+                continue
+
+            boxes_xyxy = torch.from_numpy(pred['boxes']).float().to(self.device)
+            boxes_xywh = xyxy2xywh(boxes_xyxy)
+
+            labels = pred.get('labels')
+            if labels is None:
+                labels_t = torch.zeros(len(boxes_xywh), dtype=torch.int64, device=self.device)
+            else:
+                labels_t = torch.from_numpy(labels).long().to(self.device)
+
+            pseudo_gts.append({
+                'boxes': boxes_xywh,
+                'labels': labels_t,
+            })
+
+        return pseudo_gts
+
+    def apply_perturbation(
+        self,
+        x: np.ndarray,
+        y: np.ndarray | None = None,
+        apply_mask: bool = True
+    ) -> np.ndarray:
+        """
+        Apply pre-trained OSFD perturbation to new images.
+
+        Args:
+            x: Input images (N, H, W, C) or (N, C, H, W) - NumPy
+            y: Optional labels for masking. If None, use pseudo-GT from predictor.
+            apply_mask: Whether to apply masking. Default True.
+
+        Returns:
+            Adversarial images (NumPy array)
+        """
+        if self._perturbation_torch is None:
+            raise ValueError("Perturbation not trained yet. Call generate() first or set_perturbation().")
+
+        x_original = x
+        x_is_hwc = x.ndim == 4 and x.shape[-1] in [1, 3]
+        x_input = x
+        if self.estimator.channels_first and x_is_hwc:
+            x_input = np.transpose(x, (0, 3, 1, 2))
+
+        x_torch, _ = self.estimator._preprocess_and_convert_inputs(
+            x=x_input, y=None, fit=False, no_grad=True
+        )
+        x_torch = x_torch.to(self.device, dtype=torch.float32)
+
+        if apply_mask:
+            if y is not None:
+                pseudo_gts = []
+                for label in y:
+                    from app.ai.losses.box_utils import xyxy2xywh
+
+                    boxes_xyxy = torch.from_numpy(label['boxes']).float().to(self.device)
+                    pseudo_gt = {
+                        'boxes': xyxy2xywh(boxes_xyxy),
+                        'labels': torch.from_numpy(label['labels']).long().to(self.device)
+                    }
+                    pseudo_gts.append(pseudo_gt)
+            else:
+                pseudo_gts = self._generate_pseudo_gts_for_mask(x_input)
+
+            x_adv_torch = self._apply_perturbation_with_mask(x_torch, pseudo_gts)
+        else:
+            with torch.no_grad():
+                x_adv_torch = torch.clamp(x_torch + self._perturbation_torch, self.clip_min, self.clip_max)
+
+        x_adv = self._torch_to_numpy(x_adv_torch, x_input)
+        if self.estimator.channels_first and x_is_hwc and x_adv.ndim == 4:
+            x_adv = np.transpose(x_adv, (0, 2, 3, 1))
+
+        # Ensure output format matches input
+        if x_original.ndim == 4 and x_original.shape[-1] in [1, 3]:
+            return x_adv.astype(np.float32)
+        return x_adv.astype(np.float32)

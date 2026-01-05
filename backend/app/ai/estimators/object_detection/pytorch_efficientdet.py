@@ -257,6 +257,135 @@ class PyTorchEfficientDet(PyTorchObjectDetector):
 
         return pred_dict
 
+    def _get_raw_predictions(
+        self,
+        x: "torch.Tensor"
+    ) -> "torch.Tensor":
+        """
+        Extract raw predictions from MMDetection model for attack loss.
+
+        This method extracts predictions before NMS to be compatible with
+        YOLO/RT-DETR-style attack losses.
+
+        Args:
+            x: Input tensor [batch, C, H, W]
+
+        Returns:
+            Raw predictions tensor [batch, total_proposals, 4 + num_classes]
+            Format: [cx, cy, w, h, class_scores] in xywh format (YOLO standard)
+        """
+        import torch
+        from app.ai.losses.box_utils import xyxy2xywh
+
+        # MMDetection structure:
+        # 1. backbone: extract features
+        # 2. neck: feature pyramid (BiFPN for EfficientDet)
+        # 3. bbox_head: detection head (multi-scale)
+
+        # Extract multi-scale features
+        if hasattr(self._model, 'extract_feat'):
+            feats = self._model.extract_feat(x)
+        else:
+            # Fallback: assume model is already the backbone
+            feats = self._model(x)
+
+        # Get raw predictions from bbox_head
+        if hasattr(self._model, 'bbox_head'):
+            bbox_head = self._model.bbox_head
+
+            # Forward through bbox_head to get raw predictions
+            # MMDetection bbox_head returns (cls_scores, bbox_preds)
+            # cls_scores: list of [batch, num_anchors*num_classes, H, W]
+            # bbox_preds: list of [batch, num_anchors*4, H, W]
+            cls_scores, bbox_preds = bbox_head(feats)
+
+            # Number of classes
+            num_classes = bbox_head.num_classes
+
+            # Build anchors for each feature level
+            if hasattr(bbox_head, "prior_generator"):
+                prior_generator = bbox_head.prior_generator
+            elif hasattr(bbox_head, "anchor_generator"):
+                prior_generator = bbox_head.anchor_generator
+            else:
+                raise AttributeError(
+                    "MMDetection bbox_head does not expose a prior/anchor generator."
+                )
+
+            featmap_sizes = [cls_score.shape[-2:] for cls_score in cls_scores]
+            if hasattr(prior_generator, "grid_priors"):
+                anchors_list = prior_generator.grid_priors(featmap_sizes, device=x.device)
+            elif hasattr(prior_generator, "grid_anchors"):
+                anchors_list = prior_generator.grid_anchors(featmap_sizes, device=x.device)
+            else:
+                raise AttributeError(
+                    "Anchor generator does not support grid_priors/grid_anchors."
+                )
+
+            if not hasattr(bbox_head, "bbox_coder"):
+                raise AttributeError(
+                    "MMDetection bbox_head does not expose bbox_coder for decoding deltas."
+                )
+
+            # Process each feature level and concatenate
+            all_proposals = []
+
+            img_h, img_w = x.shape[2], x.shape[3]
+
+            for level_idx, (cls_score, bbox_pred) in enumerate(zip(cls_scores, bbox_preds)):
+                batch_size = cls_score.shape[0]
+
+                # Reshape cls_score: [batch, num_anchors*num_classes, H, W]
+                # → [batch, num_anchors, num_classes, H, W]
+                # → [batch, num_anchors, H, W, num_classes]
+                # → [batch, num_anchors*H*W, num_classes]
+                num_anchors = cls_score.shape[1] // num_classes
+                h, w = cls_score.shape[2], cls_score.shape[3]
+
+                # Reshape class scores
+                cls_score = cls_score.view(batch_size, num_anchors, num_classes, h, w)
+                cls_score = cls_score.permute(0, 1, 3, 4, 2)  # [B, A, H, W, C]
+                cls_score = cls_score.contiguous().view(batch_size, -1, num_classes)  # [B, A*H*W, C]
+
+                bbox_pred = bbox_pred.view(batch_size, num_anchors, 4, h, w)
+                bbox_pred = bbox_pred.permute(0, 1, 3, 4, 2)  # [B, A, H, W, 4]
+                bbox_pred_raw = bbox_pred.contiguous().view(batch_size, -1, 4)  # [B, A*H*W, 4]
+
+                anchors = anchors_list[level_idx]
+                if not isinstance(anchors, torch.Tensor):
+                    anchors = torch.as_tensor(anchors, device=x.device, dtype=bbox_pred_raw.dtype)
+                else:
+                    anchors = anchors.to(device=x.device, dtype=bbox_pred_raw.dtype)
+                anchors_expanded = anchors.unsqueeze(0).expand(batch_size, -1, 4).reshape(-1, 4)
+                deltas = bbox_pred_raw.reshape(-1, 4)
+
+                try:
+                    decoded_xyxy = bbox_head.bbox_coder.decode(
+                        anchors_expanded, deltas, max_shape=(img_h, img_w)
+                    )
+                except TypeError:
+                    decoded_xyxy = bbox_head.bbox_coder.decode(anchors_expanded, deltas)
+
+                decoded_xyxy = decoded_xyxy.view(batch_size, -1, 4)
+                bbox_pred_xywh = xyxy2xywh(decoded_xyxy)
+
+                # Concatenate: [batch, proposals, 4 + num_classes]
+                # Format: [cx, cy, w, h, class_0, ..., class_N]
+                level_proposals = torch.cat([bbox_pred_xywh, cls_score], dim=-1)
+                all_proposals.append(level_proposals)
+
+            # Concatenate all feature levels
+            # Final shape: [batch, total_proposals, 4 + num_classes]
+            raw_predictions = torch.cat(all_proposals, dim=1)
+
+            return raw_predictions
+
+        else:
+            raise AttributeError(
+                "MMDetection model doesn't have bbox_head attribute. "
+                "Make sure the model is properly initialized."
+            )
+
     def _compute_loss(
         self,
         x: "torch.Tensor",
@@ -566,23 +695,97 @@ class PyTorchEfficientDet(PyTorchObjectDetector):
     def _get_losses(
         self,
         x: np.ndarray | "torch.Tensor",
-        y: list[dict[str, np.ndarray | "torch.Tensor"]]
+        y: list[dict[str, np.ndarray | "torch.Tensor"]],
+        **kwargs
     ) -> tuple[dict[str, "torch.Tensor"], "torch.Tensor"]:
         """
         Get the loss tensor output of the model including all preprocessing.
 
         Overrides PyTorchObjectDetector._get_losses() to use EfficientDet-specific
-        loss computation with MMDetection API.
+        loss computation with MMDetection API, but also supports attack loss.
 
         Args:
             x: Samples of shape NCHW or NHWC.
             y: Target values (list of dicts with 'boxes' and 'labels')
+            kwargs: Additional arguments for attack-specific losses
 
         Returns:
             Loss components and preprocessed input tensor
         """
         import torch
 
+        # Check if attack loss is enabled
+        if hasattr(self, '_use_attack_loss') and self._use_attack_loss:
+            # Use attack loss for EfficientDet (MMDetection)
+            self._model.eval()
+
+            self.set_dropout(False)
+            self.set_batchnorm(False)
+            self.set_multihead_attention(False)
+
+            x_preprocessed, y_preprocessed = self._preprocess_and_convert_inputs(x=x, y=y, fit=False, no_grad=False)
+            x_preprocessed = x_preprocessed.to(self.device)
+
+            if x_preprocessed.is_leaf:
+                x_preprocessed.requires_grad = True
+            else:
+                x_preprocessed.retain_grad()
+
+            # Extract raw predictions from MMDetection bbox_head
+            # This bypasses NMS and returns all proposals
+            with torch.set_grad_enabled(True):
+                # Get raw predictions: [batch, total_proposals, 4 + num_classes]
+                inference_output = self._get_raw_predictions(x_preprocessed)
+
+                # Calculate attack loss based on attack type
+                if self._attack_type == 'adversarial_patch':
+                    # Patch attack: simpler loss, just max detection score
+                    total_loss = self._custom_attack_loss(
+                        inference_output=inference_output,
+                        **kwargs
+                    )
+
+                    # Return in dict format
+                    loss_components = {
+                        'attack_loss_total': total_loss,
+                    }
+
+                elif self._attack_type == 'universal_noise':
+                    # Universal Noise: needs pseudo-GT boxes and target class
+                    pseudo_gt_boxes = kwargs.get('pseudo_gt_boxes', None)
+                    target_class_idx = kwargs.get('target_class_idx', 0)
+
+                    if pseudo_gt_boxes is None:
+                        raise ValueError(
+                            "pseudo_gt_boxes must be provided in kwargs for universal_noise attack"
+                        )
+
+                    # Ensure pseudo_gt_boxes is on correct device
+                    if isinstance(pseudo_gt_boxes, np.ndarray):
+                        pseudo_gt_boxes = torch.from_numpy(pseudo_gt_boxes).to(self.device)
+                    elif isinstance(pseudo_gt_boxes, torch.Tensor):
+                        pseudo_gt_boxes = pseudo_gt_boxes.to(self.device)
+
+                    # Calculate attack loss
+                    total_loss, targeted_loss, agnostic_loss = self._custom_attack_loss(
+                        inference_output=inference_output,
+                        pseudo_gt_boxes=pseudo_gt_boxes,
+                        target_class_idx=target_class_idx
+                    )
+
+                    # Return in dict format
+                    loss_components = {
+                        'attack_loss_total': total_loss,
+                        'attack_loss_targeted': targeted_loss,
+                        'attack_loss_agnostic': agnostic_loss
+                    }
+
+                else:
+                    raise ValueError(f"Unknown attack type: {self._attack_type}")
+
+                return loss_components, x_preprocessed
+
+        # Normal mode: use EfficientDet training loss
         self._model.train()
 
         self.set_dropout(False)
@@ -618,20 +821,25 @@ class PyTorchEfficientDet(PyTorchObjectDetector):
         Args:
             x: Input images
             y: Target labels
+            kwargs: Additional arguments for attack-specific losses
 
         Returns:
             Total loss value
         """
         import torch
 
-        # Preprocess and convert inputs
-        x_preprocessed, y_preprocessed = self._preprocess_and_convert_inputs(
-            x=x, y=y, fit=False, no_grad=False
-        )
+        # Use _get_losses for unified handling of attack/training loss
+        loss_components, _ = self._get_losses(x=x, y=y, **kwargs)
 
-        # Compute loss
-        loss_dict = self._compute_loss(x_preprocessed, y_preprocessed)
-        loss = sum(loss_dict[k] for k in self.attack_losses if k in loss_dict)
+        # Compute total loss
+        if hasattr(self, '_use_attack_loss') and self._use_attack_loss:
+            # For attack loss, use the total attack loss
+            loss = loss_components.get('attack_loss_total')
+            if loss is None:
+                raise ValueError("Attack loss not found in loss_components")
+        else:
+            # For training loss, sum specified components
+            loss = sum(loss_components[k] for k in self.attack_losses if k in loss_components)
 
         if isinstance(x, np.ndarray):
             return loss.detach().cpu().numpy()

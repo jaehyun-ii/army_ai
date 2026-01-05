@@ -362,10 +362,12 @@ class PatchService:
             await sse_logger.info(f"GPU 메모리 기반 최적 배치 사이즈: {optimal_batch_size}")
 
             # Step 5: Create ART patch attack
+            # Note: Attack loss (AdversarialPatchAttackLoss) is automatically configured
+            # by each attack class's __init__() method via _configure_attack_loss()
             await sse_logger.status(f"{attack_method.upper()} 패치 생성 중...")
 
             if attack_method == "patch":
-                # AdversarialPatchPyTorch
+                # AdversarialPatchPyTorch - uses AdversarialPatchAttackLoss (MaxProbExtractor)
                 attack = AdversarialPatchPyTorch(
                     estimator=estimator,
                     rotation_max=22.5,

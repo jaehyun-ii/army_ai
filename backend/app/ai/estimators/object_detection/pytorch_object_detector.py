@@ -47,7 +47,10 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
     output formats of torchvision.
     """
 
-    estimator_params = PyTorchEstimator.estimator_params + ["input_shape", "optimizer", "attack_losses"]
+    estimator_params = PyTorchEstimator.estimator_params + [
+        "input_shape", "optimizer", "attack_losses",
+        "use_attack_loss", "attack_type", "attack_loss_config"
+    ]
 
     def __init__(
         self,
@@ -66,6 +69,9 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
             "loss_rpn_box_reg",
         ),
         device_type: str = "gpu",
+        use_attack_loss: bool = False,
+        attack_type: str | None = None,
+        attack_loss_config: dict[str, Any] | None = None,
     ):
         """
         Initialization.
@@ -90,9 +96,12 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
                used for data preprocessing. The first value will be subtracted from the input. The input will then
                be divided by the second one.
         :param attack_losses: Tuple of any combination of strings of loss components: 'loss_classifier', 'loss_box_reg',
-                              'loss_objectness', and 'loss_rpn_box_reg'.
+                              'loss_objectness', and 'loss_rpn_box_reg'. Only used when use_attack_loss=False.
         :param device_type: Type of device to be used for model and tensors, if `cpu` run on CPU, if `gpu` run on GPU
                             if available otherwise run on CPU.
+        :param use_attack_loss: If True, use attack-specific loss function instead of training loss. Default: False.
+        :param attack_type: Type of attack for custom loss (e.g., 'universal_noise'). Only used when use_attack_loss=True.
+        :param attack_loss_config: Configuration dict for the attack-specific loss function. Optional.
         """
         import torch
         import torchvision
@@ -121,6 +130,35 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
         self._input_shape = input_shape
         self._optimizer = optimizer
         self._attack_losses = attack_losses
+
+        # Attack-specific loss configuration
+        self._use_attack_loss = use_attack_loss
+        self._attack_type = attack_type
+        self._attack_loss_config = attack_loss_config or {}
+        self._custom_attack_loss: torch.nn.Module | None = None
+
+        # Initialize custom attack loss if requested
+        if self._use_attack_loss:
+            if not self._attack_type:
+                raise ValueError(
+                    "attack_type must be specified when use_attack_loss=True. "
+                    "Available types: universal_noise"
+                )
+
+            from app.ai.losses import AttackLossRegistry
+
+            try:
+                self._custom_attack_loss = AttackLossRegistry.get(
+                    self._attack_type,
+                    self._attack_loss_config
+                )
+                logger.info(
+                    f"Initialized attack loss: {self._attack_type} with config {self._attack_loss_config}"
+                )
+            except ValueError as e:
+                raise ValueError(
+                    f"Failed to initialize attack loss '{self._attack_type}': {e}"
+                ) from e
 
         # Parameters used for subclasses
         self.weight_dict: dict[str, float] | None = None
@@ -288,7 +326,7 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
         return predictions_x1y1x2y2
 
     def _get_losses(
-        self, x: np.ndarray | "torch.Tensor", y: list[dict[str, np.ndarray | "torch.Tensor"]]
+        self, x: np.ndarray | "torch.Tensor", y: list[dict[str, np.ndarray | "torch.Tensor"]], **kwargs
     ) -> tuple[dict[str, "torch.Tensor"], "torch.Tensor"]:
         """
         Get the loss tensor output of the model including all preprocessing.
@@ -299,9 +337,20 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
 
                   - boxes [N, 4]: the boxes in [x1, y1, x2, y2] format, with 0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H.
                   - labels [N]: the labels for each image.
+        :param kwargs: Additional arguments for attack-specific losses:
+                  - pseudo_gt_boxes: Pseudo ground truth boxes for attack loss (torch.Tensor)
+                  - target_class_idx: Target class index for targeted attacks (int)
         :return: Loss components and gradients of the input `x`.
         """
-        self._model.train()
+        import torch
+
+        # Set model mode based on loss type
+        if self._use_attack_loss:
+            # Attack loss uses model in eval mode to get raw predictions
+            self._model.eval()
+        else:
+            # Training loss requires train mode
+            self._model.train()
 
         self.set_dropout(False)
         self.set_batchnorm(False)
@@ -320,11 +369,92 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
         else:
             x_preprocessed.retain_grad()
 
-        if self.criterion is None:
-            loss_components = self._model(x_preprocessed, y_preprocessed)
+        # Branch: Use attack-specific loss or training loss
+        if self._use_attack_loss and self._custom_attack_loss is not None:
+            # Use custom attack loss (e.g., DetectionAttackLoss)
+            with torch.set_grad_enabled(True):
+                # Enable raw predictions mode for YOLO wrapper (if applicable)
+                if hasattr(self._model, 'return_raw_predictions'):
+                    self._model.return_raw_predictions = True
+
+                # Get model predictions (inference mode)
+                # For YOLO models with wrapper, this will return raw predictions
+                # Format: (batch_size, num_proposals, 85) for YOLO
+                model_outputs = self._model(x_preprocessed)
+
+                # Restore normal mode
+                if hasattr(self._model, 'return_raw_predictions'):
+                    self._model.return_raw_predictions = False
+
+                # model_outputs should now be raw predictions in format:
+                # (batch_size, num_proposals, 84/85)
+                if not isinstance(model_outputs, torch.Tensor):
+                    raise ValueError(
+                        f"Expected raw predictions as torch.Tensor, got {type(model_outputs)}. "
+                        "Make sure your model wrapper supports return_raw_predictions mode."
+                    )
+
+                inference_output = model_outputs
+
+                # Calculate attack loss based on attack type
+                if self._attack_type == 'adversarial_patch':
+                    # Patch attack: simpler loss, just max detection score
+                    # Extract target_class_idx from kwargs (use same naming as universal_noise)
+                    target_class_idx = kwargs.get('target_class_idx')
+                    if target_class_idx is None:
+                        target_class_idx = self._attack_loss_config.get('target_class', 0)
+
+                    total_loss = self._custom_attack_loss(
+                        inference_output=inference_output,
+                        target_class_idx=target_class_idx,
+                        **kwargs
+                    )
+
+                    # Return in dict format
+                    loss_components = {
+                        'attack_loss_total': total_loss,
+                    }
+
+                elif self._attack_type == 'universal_noise':
+                    # Universal Noise: needs pseudo-GT boxes and target class
+                    pseudo_gt_boxes = kwargs.get('pseudo_gt_boxes', None)
+                    target_class_idx = kwargs.get('target_class_idx', 0)
+
+                    if pseudo_gt_boxes is None:
+                        raise ValueError(
+                            "pseudo_gt_boxes must be provided in kwargs for universal_noise attack"
+                        )
+
+                    # Ensure pseudo_gt_boxes is on correct device
+                    if isinstance(pseudo_gt_boxes, np.ndarray):
+                        pseudo_gt_boxes = torch.from_numpy(pseudo_gt_boxes).to(self.device)
+                    elif isinstance(pseudo_gt_boxes, torch.Tensor):
+                        pseudo_gt_boxes = pseudo_gt_boxes.to(self.device)
+
+                    # Calculate attack loss
+                    total_loss, targeted_loss, agnostic_loss = self._custom_attack_loss(
+                        inference_output=inference_output,
+                        pseudo_gt_boxes=pseudo_gt_boxes,
+                        target_class_idx=target_class_idx
+                    )
+
+                    # Return in dict format
+                    loss_components = {
+                        'attack_loss_total': total_loss,
+                        'attack_loss_targeted': targeted_loss,
+                        'attack_loss_agnostic': agnostic_loss
+                    }
+
+                else:
+                    raise ValueError(f"Unknown attack type: {self._attack_type}")
+
         else:
-            outputs = self._model(x_preprocessed)
-            loss_components = self.criterion(outputs, y_preprocessed)
+            # Use standard training loss
+            if self.criterion is None:
+                loss_components = self._model(x_preprocessed, y_preprocessed)
+            else:
+                outputs = self._model(x_preprocessed)
+                loss_components = self.criterion(outputs, y_preprocessed)
 
         return loss_components, x_preprocessed
 
@@ -340,14 +470,21 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
 
                   - boxes [N, 4]: the boxes in [x1, y1, x2, y2] format, with 0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H.
                   - labels [N]: the labels for each image.
+        :param kwargs: Additional arguments for attack-specific losses (passed to _get_losses)
         :return: Loss gradients of the same shape as `x`.
         """
         import torch
 
-        loss_components, x_grad = self._get_losses(x=x, y=y)
+        # Pass kwargs to _get_losses for attack-specific parameters
+        loss_components, x_grad = self._get_losses(x=x, y=y, **kwargs)
 
         # Compute the loss
-        if self.weight_dict is None:
+        if self._use_attack_loss:
+            # For attack loss, use the total attack loss
+            loss = loss_components.get('attack_loss_total')
+            if loss is None:
+                raise ValueError("Attack loss not found in loss_components")
+        elif self.weight_dict is None:
             loss = sum(loss_components[loss_name] for loss_name in self.attack_losses if loss_name in loss_components)
         else:
             loss = sum(
@@ -662,14 +799,21 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
 
                   - boxes [N, 4]: the boxes in [x1, y1, x2, y2] format, with 0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H.
                   - labels [N]: the labels for each image.
+        :param kwargs: Additional arguments for attack-specific losses (passed to _get_losses)
         :return: Loss.
         """
         import torch
 
-        loss_components, _ = self._get_losses(x=x, y=y)
+        # Pass kwargs to _get_losses for attack-specific parameters
+        loss_components, _ = self._get_losses(x=x, y=y, **kwargs)
 
         # Compute the loss
-        if self.weight_dict is None:
+        if self._use_attack_loss:
+            # For attack loss, use the specific attack loss
+            loss = loss_components.get('attack_loss_total')
+            if loss is None:
+                raise ValueError("Attack loss not found in loss_components")
+        elif self.weight_dict is None:
             loss = sum(loss_components[loss_name] for loss_name in self.attack_losses if loss_name in loss_components)
         else:
             loss = sum(

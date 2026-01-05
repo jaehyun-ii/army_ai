@@ -6,6 +6,12 @@ This version restores all functionality from the original AEGIS framework:
 - Differentiable loss computation
 - Object masking
 
+CRITICAL FIXES (2026-01-02):
+- Process entire dataset at once (not mini-batches) for consistency
+- Gradient ascent to maximize detection loss (make detection fail)
+- Sum gradients across all samples (like AEGIS ensemble)
+- Direct SGD-style updates (not Adam optimizer)
+
 External interface remains NumPy-based for ART compatibility.
 """
 from __future__ import annotations
@@ -102,13 +108,18 @@ class _PseudoGTGenerator:
                     pseudo_gts.append(self._empty_pseudo_gt())
                     continue
 
-                boxes = torch.from_numpy(pred['boxes']).float().to(self.device)
+                # predict() returns xyxy format, but this framework uses xywh
+                boxes_xyxy = torch.from_numpy(pred['boxes']).float().to(self.device)
                 scores = torch.from_numpy(pred['scores']).float().to(self.device)
                 classes = torch.from_numpy(pred['labels']).long().to(self.device)
 
+                # Convert xyxy to xywh (YOLO standard for this project)
+                from app.ai.losses.box_utils import xyxy2xywh
+                boxes_xywh = xyxy2xywh(boxes_xyxy)
+
                 # Filter by target class and confidence
                 mask = (classes == self.target_class_id) & (scores >= self.confidence_threshold)
-                filtered_boxes = boxes[mask]
+                filtered_boxes = boxes_xywh[mask]
                 filtered_labels = classes[mask]
                 filtered_scores = scores[mask]
 
@@ -120,7 +131,7 @@ class _PseudoGTGenerator:
                     # Use highest confidence detection
                     best_idx = filtered_scores.argmax()
                     pseudo_gt = {
-                        'boxes': filtered_boxes[best_idx:best_idx+1],  # (1, 4)
+                        'boxes': filtered_boxes[best_idx:best_idx+1],  # (1, 4) in xywh
                         'labels': filtered_labels[best_idx:best_idx+1]  # (1,)
                     }
                     pseudo_gts.append(pseudo_gt)
@@ -239,6 +250,9 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         self._perturbation_torch: nn.Parameter | None = None
         self._perturbation: np.ndarray | None = None
 
+        # Configure attack-specific loss for the estimator
+        self._configure_attack_loss()
+
         logger.info(f"UniversalNoiseAttackPyTorch initialized on device: {self.device}")
 
         # Initialize pseudo-GT generator (now ART-compliant)
@@ -287,8 +301,11 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                 # Convert y to torch format for masking
                 pseudo_gts = []
                 for label in y:
+                    from app.ai.losses.box_utils import xyxy2xywh
+
+                    boxes_xyxy = torch.from_numpy(label['boxes']).float().to(self.device)
                     pseudo_gt = {
-                        'boxes': torch.from_numpy(label['boxes']).float().to(self.device),
+                        'boxes': xyxy2xywh(boxes_xyxy),
                         'labels': torch.from_numpy(label['labels']).long().to(self.device)
                     }
                     pseudo_gts.append(pseudo_gt)
@@ -307,9 +324,12 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         self._perturbation = self._torch_to_numpy(self._perturbation_torch, x)
 
         logger.info("Universal Noise generation completed")
-        # Always return perturbation for service compatibility
-        # (service code expects tuple to extract perturbation)
-        return x_adv, self._perturbation
+
+        # Return based on return_perturbation flag (follow EvasionAttack contract)
+        if return_perturbation:
+            return x_adv, self._perturbation
+        else:
+            return x_adv
 
     def _train_universal_perturbation_pytorch(
         self,
@@ -319,13 +339,14 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
         """
         Train universal perturbation using PyTorch with ART loss.
 
-        Uses PyTorch DataLoader for efficient batch processing (Type 1 pattern).
+        FIXED: Process entire dataset at once (like AEGIS) instead of mini-batches
+        to maintain consistency across all samples.
 
         Args:
             x: Input images (N, C, H, W)
             y: Optional labels. If provided, use as ground truth. If None, generate pseudo-GT.
         """
-        logger.info(f"Training Universal Noise for {self.max_iter} iterations")
+        logger.info(f"Training Universal Noise for {self.max_iter} iterations on {len(x)} images")
 
         # Use provided labels or generate pseudo ground truth
         if y is not None:
@@ -336,12 +357,15 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                     # Already in dict format with 'boxes', 'labels'
                     pseudo_gts = []
                     for label in y:
+                        from app.ai.losses.box_utils import xyxy2xywh
+
+                        boxes_xyxy = torch.from_numpy(label['boxes']).float().to(self.device)
                         pseudo_gt = {
-                            'boxes': torch.from_numpy(label['boxes']).float().to(self.device),
+                            'boxes': xyxy2xywh(boxes_xyxy),
                             'labels': torch.from_numpy(label['labels']).long().to(self.device)
                         }
                         pseudo_gts.append(pseudo_gt)
-                    pseudo_gts_numpy = y  # Already in numpy format
+                    pseudo_gts_numpy = self._pseudo_gt_gen.torch_to_numpy_labels(pseudo_gts)
                 else:
                     raise ValueError(f"Unsupported y format: {type(y[0])}")
             else:
@@ -356,158 +380,100 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
             pseudo_gts_numpy = self._pseudo_gt_gen.torch_to_numpy_labels(pseudo_gts)
             logger.info(f"Generated pseudo-GT for {len(pseudo_gts)} images")
 
-        # Create custom dataset for labels (cannot use TensorDataset with list of dicts)
-        class LabeledImageDataset(torch.utils.data.Dataset):
-            def __init__(self, images, labels_torch, labels_numpy):
-                self.images = images
-                self.labels_torch = labels_torch
-                self.labels_numpy = labels_numpy
+        # Filter out samples with empty boxes once at the beginning
+        valid_indices = [i for i, label_dict in enumerate(pseudo_gts_numpy) if len(label_dict.get('boxes', [])) > 0]
 
-            def __len__(self):
-                return len(self.images)
+        if len(valid_indices) == 0:
+            logger.error("No valid detections found in any image. Cannot train universal perturbation.")
+            return
 
-            def __getitem__(self, idx):
-                return self.images[idx], self.labels_torch[idx], self.labels_numpy[idx]
+        # Filter all data to only include valid samples
+        x_valid = x[valid_indices]
+        pseudo_gts_valid = [pseudo_gts[i] for i in valid_indices]
+        pseudo_gts_numpy_valid = [pseudo_gts_numpy[i] for i in valid_indices]
 
-        # Custom collate function for object detection that keeps labels as list of dicts
-        def collate_fn_od(batch):
-            images = torch.stack([item[0] for item in batch])
-            labels_torch = [item[1] for item in batch]  # Keep as list of dicts
-            labels_numpy = [item[2] for item in batch]  # Keep as list of dicts
-            return images, labels_torch, labels_numpy
+        logger.info(f"Training on {len(valid_indices)}/{len(x)} images with detections")
 
-        # Create dataset and dataloader (following PGD PyTorch pattern)
-        dataset = LabeledImageDataset(x, pseudo_gts, pseudo_gts_numpy)
-        data_loader = torch.utils.data.DataLoader(
-            dataset=dataset,
-            batch_size=self.batch_size,
-            shuffle=False,  # Don't shuffle to maintain order
-            drop_last=False,
-            collate_fn=collate_fn_od  # Use custom collate for variable-size boxes
-        )
-
-        logger.info(f"Created DataLoader: {len(dataset)} samples, {len(data_loader)} batches")
-
-        # Create optimizer and scheduler (for learning rate scheduling)
-        optimizer = torch.optim.Adam([self._perturbation_torch], lr=self.eps_step)
-
-        # Create learning rate scheduler
-        scheduler = create_lr_scheduler(
-            optimizer=optimizer,
-            scheduler_type=self.lr_scheduler_type,
-            scheduler_params=self.lr_scheduler_params,
-            max_iter=self.max_iter,
-        )
-
-        if scheduler is not None:
-            logger.info(f"Using {self.lr_scheduler_type} LR scheduler")
-        else:
-            logger.info("Using constant learning rate (no scheduler)")
-
-        # Training loop with DataLoader (Type 1: PyTorch DataLoader pattern)
+        # Training loop - AEGIS style: process ALL data each iteration
         for i_iter in trange(self.max_iter, desc="Universal Noise Training", disable=not self.verbose):
-            for batch_id, (x_batch, y_batch_torch, y_batch_numpy) in enumerate(data_loader):
-                # Move batch to device
-                x_batch = x_batch.to(self.device)
+            # Apply perturbation to ALL valid images at once
+            if self.apply_mask:
+                x_adv = self._apply_perturbation_with_mask(x_valid, pseudo_gts_valid)
+            else:
+                x_adv = torch.clamp(x_valid + self._perturbation_torch, self.clip_min, self.clip_max)
 
-                # Apply perturbation
-                if self.apply_mask:
-                    # For masking, need y_batch_torch with tensors on correct device
-                    y_batch_torch_device = [{k: v.to(self.device) for k, v in y_i.items()} for y_i in y_batch_torch]
-                    x_adv_batch = self._apply_perturbation_with_mask(x_batch, y_batch_torch_device)
-                else:
-                    x_adv_batch = torch.clamp(x_batch + self._perturbation_torch, self.clip_min, self.clip_max)
+            # Compute gradient for ALL samples (like AEGIS ensemble loss)
+            # Denormalize: internal [0, 1] -> estimator expects [0, clip_max]
+            if self.estimator.clip_values is not None:
+                x_for_loss = x_adv * self.estimator.clip_values[1]
+            else:
+                x_for_loss = x_adv
 
-                # Filter out samples with empty boxes before calling loss_gradient
-                valid_indices = [i for i, label_dict in enumerate(y_batch_numpy) if len(label_dict.get('boxes', [])) > 0]
+            # Get gradients from ART loss_gradient
+            # This computes gradients for detection loss on all samples
 
-                if len(valid_indices) == 0:
-                    # All samples have no detections, skip this batch
-                    logger.warning("All samples in batch have no detected objects, skipping gradient update")
-                    continue
+            # Prepare kwargs for attack-specific loss
+            # Extract pseudo-GT boxes as (batch_size, 4) tensor for attack loss
+            pseudo_gt_boxes_batch = torch.stack([
+                pseudo_gt['boxes'][0] if len(pseudo_gt['boxes']) > 0
+                else torch.zeros(4, device=self.device)
+                for pseudo_gt in pseudo_gts_valid
+            ])  # (batch_size, 4)
 
-                # Filter x and y to only include valid samples
-                x_adv_batch_valid = x_adv_batch[valid_indices]
-                y_batch_numpy_valid = [y_batch_numpy[i] for i in valid_indices]
+            gradients = self.estimator.loss_gradient(
+                x=x_for_loss,
+                y=pseudo_gts_numpy_valid,
+                pseudo_gt_boxes=pseudo_gt_boxes_batch,  # For attack loss
+                target_class_idx=self.target_class_id   # For targeted attack
+            )
 
-                # Keep everything on a single device (match other attacks like DPatch)
-                x_adv_batch_valid = x_adv_batch_valid.detach()
+            # Ensure gradients are torch tensors on the correct device
+            if isinstance(gradients, np.ndarray):
+                grad_torch = torch.from_numpy(gradients).to(self.device)
+            else:
+                grad_torch = gradients.to(self.device)
 
-                # Denormalize: internal [0, 1] -> estimator expects [0, clip_max]
-                if self.estimator.clip_values is not None:
-                    x_for_loss = x_adv_batch_valid * self.estimator.clip_values[1]
-                else:
-                    x_for_loss = x_adv_batch_valid
+            # Ensure channel order matches internal representation
+            if not self.estimator.channels_first and grad_torch.ndim == 4:
+                grad_torch = grad_torch.permute(0, 3, 1, 2)
 
-                gradients_valid = self.estimator.loss_gradient(x=x_for_loss, y=y_batch_numpy_valid)
+            # CRITICAL FIX: Sum gradients across ALL samples (like AEGIS)
+            # Instead of averaging, sum to accumulate attack effect
+            grad_sum = grad_torch.sum(dim=0, keepdim=True)
 
-                # Ensure gradients are torch tensors on the correct device
-                if isinstance(gradients_valid, np.ndarray):
-                    grad_torch_valid = torch.from_numpy(gradients_valid).to(self.device)
-                else:
-                    grad_torch_valid = gradients_valid.to(self.device)
+            # Normalize by number of samples for stability
+            grad_avg = grad_sum / len(valid_indices)
 
-                # Ensure channel order matches internal representation
-                if not self.estimator.channels_first and grad_torch_valid.ndim == 4:
-                    grad_torch_valid = grad_torch_valid.permute(0, 3, 1, 2)
+            # CRITICAL FIX: Gradient DESCENT (not ascent) to minimize detection
+            # ART's loss_gradient gives positive gradient direction
+            # We want to INCREASE the loss (make detection fail)
+            # So we use gradient ASCENT: perturbation -= learning_rate * (-gradient)
+            # Which is: perturbation += learning_rate * gradient
+            with torch.no_grad():
+                # Direct SGD-style update (like AEGIS)
+                # Negate gradient for gradient ascent (maximize detection loss)
+                self._perturbation_torch.data += self.eps_step * grad_avg.squeeze(0)
 
-                # Gradient ascent: update perturbation to maximize loss
-                # Average gradients across valid samples only
-                grad_avg = grad_torch_valid.mean(dim=0, keepdim=True)
+                # Enforce epsilon constraint
+                self._enforce_epsilon(self.eps)
 
-                # Save diagnostic info before update
-                if i_iter % 10 == 0 or i_iter == 0:
-                    with torch.no_grad():
-                        pert_norm_before = self._perturbation_torch.norm().item()
-                        grad_norm = grad_avg.norm().item()
-                        grad_mean = grad_avg.abs().mean().item()
-
-                # Use optimizer properly (like OSFD does)
-                # Clear previous gradients
-                optimizer.zero_grad()
-
-                # Manually assign gradient to perturbation parameter
-                # Negate for gradient ascent (maximize loss)
-                # Keep shape [1, 3, H, W] to match perturbation shape
-                self._perturbation_torch.grad = -grad_avg
-
-                # Apply optimizer step (uses Adam's momentum and adaptive LR)
-                optimizer.step()
-
-                # Enforce epsilon constraint using base class
-                with torch.no_grad():
-                    self._enforce_epsilon(self.eps)
-
-                    # Debug logging
-                    if i_iter % 10 == 0 or i_iter == 0:
-                        pert_norm_after = self._perturbation_torch.norm().item()
-                        logger.debug(
-                            f"Iter {i_iter}: grad_norm={grad_norm:.6f}, grad_mean={grad_mean:.6f}, "
-                            f"pert_before={pert_norm_before:.6f}, pert_after={pert_norm_after:.6f}, "
-                            f"eps={self.eps:.6f}"
-                        )
-
-                if i_iter == 0 and batch_id == 0:
-                    logger.info(f"Using ART loss_gradient: grad shape={grad_torch_valid.shape}, norm={grad_torch_valid.norm():.4f}")
-
-            # Step the learning rate scheduler
-            if scheduler is not None:
-                scheduler.step()
-
-            # Get current learning rate
-            current_lr = optimizer.param_groups[0]['lr']
-
+            # Logging
             if self.verbose and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
-                logger.info(
-                    f"Iter {i_iter}/{self.max_iter}: Perturbation norm = {self._perturbation_torch.norm().item():.6f}, "
-                    f"LR = {current_lr:.6f}"
-                )
+                with torch.no_grad():
+                    pert_norm = self._perturbation_torch.norm().item()
+                    grad_norm = grad_avg.norm().item()
+                    logger.info(
+                        f"Iter {i_iter}/{self.max_iter}: "
+                        f"Perturbation norm = {pert_norm:.6f}, "
+                        f"Gradient norm = {grad_norm:.6f}, "
+                        f"LR = {self.eps_step:.6f}"
+                    )
 
             # Progress callback for SSE updates
             if self.progress_callback and (i_iter % 10 == 0 or i_iter == self.max_iter - 1):
                 try:
                     perturbation_norm = self._perturbation_torch.norm().item()
-                    self.progress_callback(i_iter, self.max_iter, perturbation_norm, current_lr)
+                    self.progress_callback(i_iter, self.max_iter, perturbation_norm, self.eps_step)
                 except Exception as e:
                     logger.warning(f"Progress callback failed: {e}")
 
@@ -533,11 +499,13 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
                 continue
 
             boxes = pseudo_gts[i]['boxes']
+            from app.ai.losses.box_utils import xywh2xyxy
+            boxes_xyxy = xywh2xyxy(boxes)
 
             # Create mask for this image
             mask = torch.zeros(1, x.shape[2], x.shape[3], device=self.device)
 
-            for box in boxes:
+            for box in boxes_xyxy:
                 x1, y1, x2, y2 = box[:4].int()
 
                 # Ensure coordinates are within bounds
@@ -555,6 +523,39 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
             x_adv[i] = torch.clamp(x[i] + perturbation_masked, self.clip_min, self.clip_max)
 
         return x_adv
+
+    def _configure_attack_loss(self) -> None:
+        """
+        Configure the estimator to use attack-specific loss (DetectionAttackLoss).
+
+        This method encapsulates the attack loss configuration within the attack class,
+        following proper OOP principles instead of having the service layer mutate
+        private fields.
+        """
+        from app.ai.losses import AttackLossRegistry
+
+        # Configure estimator for universal noise attack
+        self.estimator._use_attack_loss = True
+        self.estimator._attack_type = 'universal_noise'
+        self.estimator._attack_loss_config = {
+            'iou_threshold': 0.1,           # Min IoU to consider a box
+            'class_conf_threshold': 0.05,   # Min confidence for agnostic loss
+            'top_k_boxes': 5,               # Use top-5 boxes
+            'top_n_classes': 3,             # Sum top-3 class scores
+            'lambda_targeted': 1.0,         # Weight for targeted loss
+            'lambda_agnostic': 1.5          # Weight for agnostic loss
+        }
+
+        # Initialize the custom attack loss
+        self.estimator._custom_attack_loss = AttackLossRegistry.get(
+            self.estimator._attack_type,
+            self.estimator._attack_loss_config
+        )
+
+        logger.info(
+            f"Attack loss configured: {self.estimator._attack_type} "
+            f"with config {self.estimator._attack_loss_config}"
+        )
 
     def _check_params(self):
         """Check validity of parameters."""
@@ -633,11 +634,15 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
 
     def _get_clip_bounds(self) -> tuple[float, float]:
         """
-        Determine clipping bounds; fall back to detector-friendly [0, 255].
+        Determine clipping bounds for INTERNAL normalized [0, 1] scale.
+
+        IMPORTANT: Internally, we work in [0, 1] normalized scale.
+        We only scale to estimator.clip_values (e.g., [0, 255]) when
+        passing to estimator.loss_gradient().
         """
-        if self.estimator.clip_values is not None:
-            return float(self.estimator.clip_values[0]), float(self.estimator.clip_values[1])
-        return 0.0, 255.0
+        # Always use [0, 1] for internal operations
+        # This avoids scale mixing issues
+        return 0.0, 1.0
 
     @property
     def perturbation(self) -> np.ndarray | None:
@@ -664,3 +669,70 @@ class UniversalNoiseAttackPyTorch(EvasionAttack):
             return
         # Clamp around 0 since perturbation is additive
         self._perturbation_torch.data = torch.clamp(self._perturbation_torch.data, -eps, eps)
+
+    def apply_perturbation(
+        self,
+        x: np.ndarray,
+        y: np.ndarray | None = None,
+        apply_mask: bool = True
+    ) -> np.ndarray:
+        """
+        Apply pre-trained universal perturbation to new images with proper masking.
+
+        This method is for inference after training. It applies the learned perturbation
+        with the same masking logic used during training.
+
+        Args:
+            x: Input images (N, H, W, C) or (N, C, H, W) - NumPy
+            y: Optional labels for masking. If None, generate pseudo-GT.
+            apply_mask: Whether to apply masking. Default True.
+
+        Returns:
+            Adversarial images (NumPy array)
+        """
+        if self._perturbation_torch is None:
+            raise ValueError("Perturbation not trained yet. Call generate() first or set_perturbation().")
+
+        logger.info(f"Applying universal perturbation to {len(x)} images (apply_mask={apply_mask})")
+
+        # Convert to torch
+        x_torch, x_original = self._preprocess_and_convert(x)
+
+        # Apply perturbation with or without masking
+        if apply_mask:
+            # Use provided labels or generate pseudo-GT for masking
+            if y is not None:
+                # Convert y to torch format
+                pseudo_gts = []
+                for label in y:
+                    if isinstance(label, dict) and 'boxes' in label:
+                        from app.ai.losses.box_utils import xyxy2xywh
+
+                        boxes_xyxy = torch.from_numpy(label['boxes']).float().to(self.device)
+                        pseudo_gt = {
+                            'boxes': xyxy2xywh(boxes_xyxy),
+                            'labels': torch.from_numpy(label['labels']).long().to(self.device)
+                        }
+                        pseudo_gts.append(pseudo_gt)
+                    else:
+                        # Empty pseudo-GT if no boxes
+                        pseudo_gts.append({
+                            'boxes': torch.zeros(0, 4, dtype=torch.float32, device=self.device),
+                            'labels': torch.zeros(0, dtype=torch.int64, device=self.device)
+                        })
+                logger.info(f"Using provided labels for masking")
+            else:
+                # Generate pseudo-GT using ART predict API
+                pseudo_gts = self._pseudo_gt_gen.generate_from_estimator(x_torch)
+                logger.info(f"Generated pseudo-GT for masking")
+
+            x_adv_torch = self._apply_perturbation_with_mask(x_torch, pseudo_gts)
+        else:
+            with torch.no_grad():
+                x_adv_torch = torch.clamp(x_torch + self._perturbation_torch, self.clip_min, self.clip_max)
+
+        # Convert back to NumPy
+        x_adv = self._torch_to_numpy(x_adv_torch, x_original)
+
+        logger.info(f"Applied perturbation to {len(x)} images")
+        return x_adv

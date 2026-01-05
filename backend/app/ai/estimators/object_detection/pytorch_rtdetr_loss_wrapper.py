@@ -31,6 +31,7 @@ class PyTorchRTDETRLossWrapper(torch.nn.Module):
         self.device = device
         self._head_patched = False
         self._cdn_patched = False
+        self.return_raw_predictions = False  # Flag for attack loss mode
 
         try:
             from ultralytics.models.rtdetr import RTDETRPredictor
@@ -369,8 +370,60 @@ class PyTorchRTDETRLossWrapper(torch.nn.Module):
 
             return loss_components_dict
         else:
-            # Inference mode - return predictions
+            # Inference mode
             preds = self.model(images)
+
+            # If attack loss mode, return raw predictions
+            if self.return_raw_predictions:
+                # RT-DETR returns a single tensor during inference (after head processing)
+                # Shape: (batch_size, num_queries, 84) where 84 = 4 (bbox) + 80 (classes)
+                # IMPORTANT: RT-DETR outputs NORMALIZED cxcywh coordinates (0~1 range)
+                # We need to convert to pixel coordinates (xywh) for consistency
+                # Note: RT-DETR doesn't have objectness score (DETR-based, not anchor-based)
+
+                if isinstance(preds, torch.Tensor):
+                    # Already in good format: (batch, num_queries, features)
+                    # RT-DETR typically has 300 queries
+                    # Extract bbox and class scores
+                    bbox_norm = preds[..., :4]  # (batch, num_queries, 4) - normalized cxcywh
+                    class_scores = preds[..., 4:]  # (batch, num_queries, num_classes)
+
+                    # Convert normalized coordinates to pixel coordinates
+                    # RT-DETR outputs normalized cxcywh (0~1), need to scale to image size
+                    h, w = images.shape[2], images.shape[3]
+                    scale = torch.tensor([w, h, w, h], device=preds.device, dtype=preds.dtype)
+                    bbox_pixels = bbox_norm * scale  # (batch, num_queries, 4) - pixel cxcywh (xywh)
+
+                    # Combine: (batch, num_queries, 4 + num_classes)
+                    scaled_preds = torch.cat([bbox_pixels, class_scores], dim=-1)
+                    return scaled_preds
+                else:
+                    # If preds is tuple/list, it might be from training mode
+                    # Extract decoder predictions
+                    if isinstance(preds, (tuple, list)) and len(preds) >= 2:
+                        # Training format: (dec_bboxes, dec_scores, ...)
+                        # dec_scores shape: (num_decoder_layers, batch, num_queries, num_classes)
+                        # dec_bboxes shape: (num_decoder_layers, batch, num_queries, 4) - normalized cxcywh
+                        dec_bboxes, dec_scores = preds[0], preds[1]
+
+                        # Use last decoder layer predictions
+                        final_bboxes_norm = dec_bboxes[-1]  # (batch, num_queries, 4) - normalized
+                        final_scores = dec_scores[-1]  # (batch, num_queries, num_classes)
+
+                        # Convert normalized coordinates to pixel coordinates
+                        h, w = images.shape[2], images.shape[3]
+                        scale = torch.tensor([w, h, w, h], device=final_bboxes_norm.device, dtype=final_bboxes_norm.dtype)
+                        final_bboxes_pixels = final_bboxes_norm * scale  # pixel cxcywh (xywh)
+
+                        # Concatenate: (batch, num_queries, 4 + num_classes)
+                        combined = torch.cat([final_bboxes_pixels, final_scores], dim=-1)
+                        return combined
+                    else:
+                        raise ValueError(
+                            f"Unexpected RT-DETR prediction format: {type(preds)}"
+                        )
+
+            # Normal inference mode: Apply NMS and postprocessing
             self.predictor.model = self.model
             self.predictor.batch = [images]
             preds = self.predictor.postprocess(preds, images, images)

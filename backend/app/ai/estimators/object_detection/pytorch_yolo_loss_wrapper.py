@@ -28,6 +28,7 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
     def __init__(self, model, name):
         super().__init__()
         self.model = model
+        self.return_raw_predictions = False  # Flag for attack loss mode
         try:
             from ultralytics.models.yolo.detect import DetectionPredictor
             from ultralytics.utils.loss import v8DetectionLoss, E2EDetectLoss
@@ -94,7 +95,73 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
             loss_components_dict["loss_dfl"] = loss_components[2].sum()
             return loss_components_dict
         else:
+            # Get raw predictions from model (before NMS/postprocessing)
             preds = self.model(x)
+
+            # If attack loss mode, return raw predictions in YOLO format (xywh)
+            # Raw predictions need to be in format: (batch_size, num_proposals, features)
+            # IMPORTANT: Keep boxes in xywh format (YOLO standard format for this project)
+            if self.return_raw_predictions:
+                # YOLO v8+ outputs: (batch_size, 84, 8400) for 80-class models
+                #   - 84 = 4 bbox (xywh) + 80 classes (no objectness)
+                #   - 8400 = total anchors from all feature levels
+                # YOLO v5 outputs: (batch_size, 85, num_anchors)
+                #   - 85 = 4 bbox (xywh) + 1 obj + 80 classes
+
+                if isinstance(preds, (list, tuple)):
+                    # Multiple prediction heads - concatenate along spatial dimension
+                    # Handle nested lists/tuples from some Ultralytics variants.
+                    pred_tensors = []
+
+                    def collect_tensors(obj):
+                        if torch.is_tensor(obj):
+                            if obj.dim() == 3 and (obj.size(1) in [84, 85] or obj.size(2) in [84, 85]):
+                                pred_tensors.append(obj)
+                            return
+                        if isinstance(obj, (list, tuple)):
+                            for item in obj:
+                                collect_tensors(item)
+                            return
+                        if isinstance(obj, dict):
+                            for key in ("preds", "output", "outputs"):
+                                if key in obj:
+                                    collect_tensors(obj[key])
+                                    return
+
+                    collect_tensors(preds)
+
+                    if not pred_tensors:
+                        raise ValueError(
+                            "No valid prediction tensors found for attack loss. "
+                            "Expected YOLO raw preds with 84/85 features."
+                        )
+
+                    normalized = []
+                    for pred in pred_tensors:
+                        if pred.size(1) in [84, 85]:
+                            normalized.append(pred)
+                        elif pred.size(2) in [84, 85]:
+                            normalized.append(pred.permute(0, 2, 1))
+
+                    if not normalized:
+                        raise ValueError(
+                            "No compatible YOLO prediction tensors found for attack loss."
+                        )
+
+                    concatenated_preds = torch.cat(normalized, dim=2)
+                    # Transpose to (batch, total_anchors, 84/85) for DetectionAttackLoss
+                    return concatenated_preds.permute(0, 2, 1)
+                else:
+                    # Single prediction tensor: (batch, features, num_anchors)
+                    # Transpose to (batch, num_anchors, features)
+                    if preds.dim() == 3 and preds.size(1) in [84, 85]:
+                        # YOLO v8/v5 format: (batch, 84/85, num_anchors)
+                        return preds.permute(0, 2, 1)
+                    else:
+                        # Already in correct format or unknown format
+                        return preds
+
+            # Normal inference mode: Apply NMS and postprocessing
             self.detection_predictor.model = self.model
             self.detection_predictor.batch = [x]
             preds = self.detection_predictor.postprocess(preds, x, x)

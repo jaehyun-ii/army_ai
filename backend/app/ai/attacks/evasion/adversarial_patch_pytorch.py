@@ -89,6 +89,7 @@ class AdversarialPatchPyTorch(EvasionAttack):
         verbose: bool = True,
         scheduler_type: str = "constant",
         scheduler_params: dict | None = None,
+        target_class_id: int = 0,
     ):
         """
         Create an instance of the :class:`.AdversarialPatchPyTorch`.
@@ -148,6 +149,7 @@ class AdversarialPatchPyTorch(EvasionAttack):
         self.image_shape = estimator.input_shape
         self.targeted = targeted
         self.verbose = verbose
+        self.target_class_id = target_class_id
         self._check_params()
 
         # Use provided scheduler configuration or defaults
@@ -202,6 +204,37 @@ class AdversarialPatchPyTorch(EvasionAttack):
                 logger.info("Using constant learning rate (no scheduler)")
         else:
             self._scheduler = None
+
+        # Configure attack-specific loss for the estimator
+        self._configure_attack_loss()
+
+    def _configure_attack_loss(self) -> None:
+        """
+        Configure the estimator to use attack-specific loss (AdversarialPatchAttackLoss).
+
+        This method encapsulates the attack loss configuration within the attack class,
+        following proper OOP principles instead of having the service layer mutate
+        private fields.
+        """
+        from app.ai.losses import AttackLossRegistry
+
+        # Configure estimator for adversarial patch attack
+        self.estimator._use_attack_loss = True
+        self.estimator._attack_type = 'adversarial_patch'
+        self.estimator._attack_loss_config = {
+            'target_class': self.target_class_id,  # Use provided target class
+        }
+
+        # Initialize the custom attack loss
+        self.estimator._custom_attack_loss = AttackLossRegistry.get(
+            self.estimator._attack_type,
+            self.estimator._attack_loss_config
+        )
+
+        logger.info(
+            f"Attack loss configured: {self.estimator._attack_type} "
+            f"(AdversarialPatchAttackLoss - MaxProbExtractor based)"
+        )
 
     def _train_step(
         self,

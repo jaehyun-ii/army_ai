@@ -33,7 +33,16 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     curl \
     libgl1 \
-    libglib2.0-0 && \
+    libglib2.0-0 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    libcairo2 \
+    libharfbuzz0b \
+    fonts-noto-cjk \
+    fonts-noto-cjk-extra && \
     rm -rf /var/lib/apt/lists/*
 
 # 3. pip 업그레이드 (Python 3.12 호환 setuptools 설치)
