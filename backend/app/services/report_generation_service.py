@@ -58,7 +58,47 @@ class ReportGenerationService:
             import matplotlib
             matplotlib.use('Agg')  # GUI 없이 사용
             import matplotlib.pyplot as plt
+            import matplotlib.font_manager as fm
             import numpy as np
+
+            # 한글 폰트 설정
+            try:
+                # matplotlib 폰트 캐시 재빌드
+                fm._load_fontmanager(try_read_cache=False)
+
+                # 시스템에 설치된 한글 폰트 찾기 (우선순위: Noto Sans CJK > Nanum > Malgun)
+                font_list = fm.findSystemFonts(fontpaths=None, fontext='ttf')
+                korean_fonts = []
+
+                # Noto Sans CJK 우선 검색
+                korean_fonts = [f for f in font_list if 'NotoSansCJK' in f or 'NotoSansKR' in f]
+                if not korean_fonts:
+                    # Nanum 폰트 검색
+                    korean_fonts = [f for f in font_list if 'Nanum' in f or 'NanumGothic' in f]
+                if not korean_fonts:
+                    # Malgun 폰트 검색
+                    korean_fonts = [f for f in font_list if 'Malgun' in f]
+
+                if korean_fonts:
+                    font_path = korean_fonts[0]
+                    font_prop = fm.FontProperties(fname=font_path)
+                    plt.rcParams['font.family'] = font_prop.get_name()
+                    logger.info(f"한글 폰트 설정 완료: {font_path}")
+                else:
+                    # 폰트 이름으로 직접 설정 시도
+                    try:
+                        plt.rcParams['font.family'] = 'Noto Sans CJK KR'
+                        logger.info("한글 폰트 설정 완료: Noto Sans CJK KR (이름 기반)")
+                    except:
+                        plt.rcParams['font.family'] = 'DejaVu Sans'
+                        logger.warning("한글 폰트를 찾을 수 없어 DejaVu Sans 사용")
+
+                # 마이너스 기호 깨짐 방지
+                plt.rcParams['axes.unicode_minus'] = False
+            except Exception as font_error:
+                logger.warning(f"폰트 설정 중 오류 발생: {font_error}")
+                plt.rcParams['axes.unicode_minus'] = False
+
             self._plt = plt
             self._np = np
             self._matplotlib_available = True

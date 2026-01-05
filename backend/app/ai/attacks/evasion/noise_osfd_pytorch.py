@@ -384,12 +384,12 @@ class NoiseOSFDPyTorch(EvasionAttack):
     def __init__(
         self,
         estimator: "OBJECT_DETECTOR_TYPE",
-        eps: float = 0.3,
-        eps_step: float = 0.01,
-        max_iter: int = 30,
+        eps: float = 8.0 / 255.0,  # AEGIS default: 8 in [0,255] scale = 0.031 in [0,1] scale
+        eps_step: float = 0.001,  # AEGIS default: 0.001 (learning rate)
+        max_iter: int = 100,  # AEGIS default: 100 epochs
         batch_size: int = 4,
         feature_layer_indices: list[int] | None = None,
-        amplification_factor: float = 10.0,
+        amplification_factor: float = 3.0,  # AEGIS default: 3.0 (not 10.0!)
         apply_augmentation: bool = True,
         summary_writer: str | bool | SummaryWriter = False,
         verbose: bool = True,
@@ -401,12 +401,14 @@ class NoiseOSFDPyTorch(EvasionAttack):
         Create a NoiseOSFDPyTorch attack instance.
 
         :param estimator: A trained object detector.
-        :param eps: Maximum perturbation epsilon.
-        :param eps_step: Learning rate for perturbation optimization.
-        :param max_iter: Maximum number of iterations.
+        :param eps: Maximum perturbation epsilon (L-inf norm). Default: 8/255 ≈ 0.031 (AEGIS paper).
+        :param eps_step: Learning rate for perturbation optimization. Default: 0.001 (AEGIS paper).
+        :param max_iter: Maximum number of iterations. Default: 100 (AEGIS paper).
         :param batch_size: Batch size for training.
-        :param feature_layer_indices: Indices of layers to extract features from.
-        :param amplification_factor: Factor K for amplifying benign features.
+        :param feature_layer_indices: Indices of layers to extract features from. Default: [10, 15, 20].
+        :param amplification_factor: Factor K for amplifying benign features. Default: 3.0 (AEGIS paper).
+                                      Setting this too high (e.g., 10.0) causes extreme perturbations
+                                      that result in black/white images.
         :param apply_augmentation: Whether to apply RRB augmentation.
         :param summary_writer: Activate summary writer for TensorBoard.
                                Default is `False` and deactivated summary writer.
@@ -435,18 +437,33 @@ class NoiseOSFDPyTorch(EvasionAttack):
         self.progress_callback = progress_callback
         self.clip_min, self.clip_max = self._get_clip_bounds()
         self._input_scale = float(self.estimator.clip_values[1]) if self.estimator.clip_values is not None else 1.0
+
+        # Auto-scale epsilon if provided in [0, 255] scale instead of [0, 1]
+        original_eps = self.eps
+        original_eps_step = self.eps_step
         if self._input_scale > 1.0:
             if self.eps > 1.0:
                 self.eps = self.eps / self._input_scale
+                logger.info(f"Auto-scaled eps from {original_eps} to {self.eps} (input_scale={self._input_scale})")
             if self.eps_step > 1.0:
                 self.eps_step = self.eps_step / self._input_scale
+                logger.info(f"Auto-scaled eps_step from {original_eps_step} to {self.eps_step} (input_scale={self._input_scale})")
+
         self._check_params()
 
         # Universal perturbation (PyTorch parameter)
         self._perturbation_torch: nn.Parameter | None = None
         self._perturbation: np.ndarray | None = None
 
-        logger.info(f"NoiseOSFDPyTorch initialized on device: {self.device}")
+        logger.info(
+            f"NoiseOSFDPyTorch initialized on device: {self.device}\n"
+            f"  - eps: {self.eps:.4f} (L-inf norm bound)\n"
+            f"  - eps_step: {self.eps_step:.4f} (learning rate)\n"
+            f"  - max_iter: {self.max_iter}\n"
+            f"  - amplification_factor: {self.amplification_factor}\n"
+            f"  - feature_layers: {self.feature_layer_indices}\n"
+            f"  - apply_augmentation: {self.apply_augmentation}"
+        )
 
         # Initialize internal PyTorch components
         self._feature_extractor = None

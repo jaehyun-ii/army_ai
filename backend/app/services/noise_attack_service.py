@@ -68,9 +68,9 @@ def get_attack_intensity_preset(attack_method: str, intensity_level: str) -> dic
             "strong": {"epsilon": 12.0, "iterations": 500, "description": "강한 범용 노이즈 (효과성 우선)"},
         },
         "noise_osfd": {
-            "weak": {"epsilon": 4.0, "iterations": 100, "description": "약한 OSFD (은폐성 우선)"},
-            "medium": {"epsilon": 8.0, "iterations": 300, "description": "보통 OSFD (균형)"},
-            "strong": {"epsilon": 12.0, "iterations": 500, "description": "강한 OSFD (효과성 우선)"},
+            "weak": {"epsilon": 4.0, "iterations": 50, "description": "약한 OSFD (은폐성 우선)"},
+            "medium": {"epsilon": 8.0, "iterations": 100, "description": "보통 OSFD (AEGIS 논문 기본값)"},
+            "strong": {"epsilon": 12.0, "iterations": 150, "description": "강한 OSFD (효과성 우선)"},
         },
     }
 
@@ -116,14 +116,14 @@ def get_noise_attack_config(attack_method: str, iterations: int, epsilon: float)
             "description": "Universal Noise (범용 perturbation)",
         },
         "noise_osfd": {
-            # Noise OSFD: 특징 증폭 기반 공격
-            "alpha": epsilon / 10,  # epsilon의 1/10로 특징 증폭 최적화
+            # Noise OSFD: 특징 증폭 기반 공격 (AEGIS paper defaults)
+            "alpha": 0.255,  # Fixed learning rate: 0.001 in [0,1] scale = 0.255 in [0,255] scale
             "scheduler_type": "cosine",
             "scheduler_params": {
                 "T_max": iterations,
                 "eta_min": 0.0,  # 최소 학습률 0
             },
-            "description": "Object-aware Spatial Feature Distortion",
+            "description": "Object-aware Spatial Feature Distortion (OSFD)",
         },
     }
 
@@ -418,7 +418,7 @@ class NoiseAttackService:
 
                 # Get feature layer indices (can be customized)
                 feature_layers = [10, 15, 20]  # Default YOLO backbone layers
-                amplification_factor = 10.0  # Default amplification
+                amplification_factor = 3.0  # AEGIS paper default (NOT 10.0!)
 
                 # Get scheduler configuration
                 scheduler_type = attack_config.get("scheduler_type", "constant")

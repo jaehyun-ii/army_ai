@@ -1,39 +1,4 @@
-rmy_ai_backend_dev   | 2026-01-02 08:46:18 - app.services.noise_attack_service - ERROR - 공격 데이터셋 생성 중 오류가 발생했습니다: name 'torch' is not defined
-army_ai_backend_dev   | 2026-01-02 08:46:18 - app.services.noise_attack_service - ERROR - Error creating noise attack dataset: name 'torch' is not defined
-army_ai_backend_dev   | Traceback (most recent call last):
-army_ai_backend_dev   |   File "/app/app/services/noise_attack_service.py", line 396, in create_noise_attack_dataset
-army_ai_backend_dev   |     attack = UniversalNoiseAttackPyTorch(
-army_ai_backend_dev   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-army_ai_backend_dev   |   File "/app/app/ai/attacks/evasion/universal_noise_pytorch.py", line 254, in __init__
-army_ai_backend_dev   |     self._configure_attack_loss()
-army_ai_backend_dev   |   File "/app/app/ai/attacks/evasion/universal_noise_pytorch.py", line 535, in _configure_attack_loss
-army_ai_backend_dev   |     from app.ai.losses import AttackLossRegistry
-army_ai_backend_dev   |   File "/app/app/ai/losses/__init__.py", line 172, in <module>
-army_ai_backend_dev   |     class AdversarialPatchAttackLoss(nn.Module):
-army_ai_backend_dev   |   File "/app/app/ai/losses/__init__.py", line 189, in AdversarialPatchAttackLoss
-army_ai_backend_dev   |     inference_output: torch.Tensor,
-army_ai_backend_dev   |                       ^^^^^
-army_ai_backend_dev   | NameError: name 'torch' is not defined
-army_ai_backend_dev   | 2026-01-02 08:46:18 - app.services.sse_support - DEBUG - [SSEManager] Queued message for session attack_1767343577645: error
-army_ai_backend_dev   | [Background] Noise attack failed: name 'torch' is not defined
-army_ai_backend_dev   | Traceback (most recent call last):
-army_ai_backend_dev   |   File "/app/app/api/v1/endpoints/attack_datasets.py", line 128, in _create_noise_attack_background
-army_ai_backend_dev   |     await noise_attack_service.create_noise_attack_dataset(
-army_ai_backend_dev   |   File "/app/app/services/noise_attack_service.py", line 396, in create_noise_attack_dataset
-army_ai_backend_dev   |     attack = UniversalNoiseAttackPyTorch(
-army_ai_backend_dev   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-army_ai_backend_dev   |   File "/app/app/ai/attacks/evasion/universal_noise_pytorch.py", line 254, in __init__
-army_ai_backend_dev   |     self._configure_attack_loss()
-army_ai_backend_dev   |   File "/app/app/ai/attacks/evasion/universal_noise_pytorch.py", line 535, in _configure_attack_loss
-army_ai_backend_dev   |     from app.ai.losses import AttackLossRegistry
-
-army_ai_frontend_dev  |  GET /api/attack-datasets/sse/attack_1767343577645 200 in 849ms
-army_ai_backend_dev   |   File "/app/app/ai/losses/__init__.py", line 172, in <module>
-army_ai_backend_dev   |     class AdversarialPatchAttackLoss(nn.Module):
-army_ai_backend_dev   |   File "/app/app/ai/losses/__init__.py", line 189, in AdversarialPatchAttackLoss
-army_ai_backend_dev   |     inference_output: torch.Tensor,
-army_ai_backend_dev   |                       ^^^^^
-army_ai_backend_dev   | NameError: name 'torch' is not defined"""
+"""
 Detection Attack Loss for adversarial attacks on object detectors.
 Ported from AEGIS framework's DetectionLoss.
 
