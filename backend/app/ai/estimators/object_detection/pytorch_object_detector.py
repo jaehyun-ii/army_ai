@@ -344,14 +344,12 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
         """
         import torch
 
-        # Set model mode based on loss type
-        if self._use_attack_loss:
-            # Attack loss uses model in eval mode to get raw predictions
-            self._model.eval()
-        else:
-            # Training loss requires train mode
-            self._model.train()
+        # Set model mode - always use train mode to maintain gradients
+        # Ultralytics YOLO uses inference_mode in eval which blocks all gradients
+        # For attack loss, we use return_raw_predictions flag instead
+        self._model.train()
 
+        # Disable dropout and other stochastic layers for deterministic behavior
         self.set_dropout(False)
         self.set_batchnorm(False)
         self.set_multihead_attention(False)
@@ -374,13 +372,21 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
             # Use custom attack loss (e.g., DetectionAttackLoss)
             with torch.set_grad_enabled(True):
                 # Enable raw predictions mode for YOLO wrapper (if applicable)
+                # This tells the wrapper to return raw predictions without NMS
                 if hasattr(self._model, 'return_raw_predictions'):
                     self._model.return_raw_predictions = True
 
-                # Get model predictions (inference mode)
+                # Debug: Check input stats before model call
+                logger.debug(f"Input x_preprocessed: mean={x_preprocessed.mean().item():.6f}, std={x_preprocessed.std().item():.6f}, requires_grad={x_preprocessed.requires_grad}")
+
+                # Get model predictions (wrapper in training mode returns raw predictions)
                 # For YOLO models with wrapper, this will return raw predictions
                 # Format: (batch_size, num_proposals, 85) for YOLO
                 model_outputs = self._model(x_preprocessed)
+
+                # Debug: Check output stats
+                if isinstance(model_outputs, torch.Tensor):
+                    logger.debug(f"Output model_outputs: mean={model_outputs.mean().item():.6f}, std={model_outputs.std().item():.6f}, requires_grad={model_outputs.requires_grad}")
 
                 # Restore normal mode
                 if hasattr(self._model, 'return_raw_predictions'):

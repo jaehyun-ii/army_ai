@@ -29,6 +29,14 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
         super().__init__()
         self.model = model
         self.return_raw_predictions = False  # Flag for attack loss mode
+        # Determine number of classes for dynamic feature-size checks
+        if hasattr(model, "nc"):
+            self.num_classes = int(model.nc)
+        elif hasattr(model, "names"):
+            self.num_classes = len(model.names)
+        else:
+            # Fallback to COCO classes if not available
+            self.num_classes = 80
         try:
             from ultralytics.models.yolo.detect import DetectionPredictor
             from ultralytics.utils.loss import v8DetectionLoss, E2EDetectLoss
@@ -44,7 +52,9 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
 
     def forward(self, x, targets=None):
         """Transforms the target to dict expected by model.loss"""
-        if self.training:
+        # When return_raw_predictions=True, skip training loss and return raw predictions
+        # This allows attack loss computation while keeping wrapper in training mode
+        if self.training and not self.return_raw_predictions:
             if targets is None:
                 raise ValueError("Targets should not be None when training.")
 
@@ -96,7 +106,45 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
             return loss_components_dict
         else:
             # Get raw predictions from model (before NMS/postprocessing)
-            preds = self.model(x)
+            # For attack loss mode, we need raw predictions with gradients
+            # CRITICAL: Set internal YOLO model to eval mode for correct prediction format
+            # But keep gradients enabled with torch.set_grad_enabled(True)
+
+            if self.return_raw_predictions:
+                # Attack loss mode: need raw predictions with gradients
+                import logging
+                logger = logging.getLogger(__name__)
+
+                was_training = self.model.training
+                self.model.eval()
+
+                logger.debug(f"[Wrapper] Before model call: x.requires_grad={x.requires_grad}, torch.is_grad_enabled()={torch.is_grad_enabled()}")
+
+                # Use a no_grad=False context to ensure gradients flow
+                # Even in eval mode, we can compute gradients by enabling grad explicitly
+                with torch.set_grad_enabled(True):
+                    # Prefer internal _predict_once to get raw head outputs without NMS/inference_mode
+                    if hasattr(self.model, "_predict_once"):
+                        logger.debug("[Wrapper] Using self.model._predict_once(x)")
+                        preds = self.model._predict_once(x)
+                    elif hasattr(self.model, "forward"):
+                        logger.debug("[Wrapper] Using self.model.forward(x)")
+                        preds = self.model.forward(x)
+                    else:
+                        logger.debug("[Wrapper] Using self.model(x)")
+                        preds = self.model(x)
+
+                logger.debug(f"[Wrapper] After model call: preds type={type(preds)}, requires_grad={preds.requires_grad if isinstance(preds, torch.Tensor) else 'N/A'}")
+
+                # Restore training mode
+                if was_training:
+                    self.model.train()
+            else:
+                # Normal inference: just call forward
+                if hasattr(self.model, 'forward'):
+                    preds = self.model.forward(x)
+                else:
+                    preds = self.model(x)
 
             # If attack loss mode, return raw predictions in YOLO format (xywh)
             # Raw predictions need to be in format: (batch_size, num_proposals, features)
@@ -108,58 +156,118 @@ class PyTorchYoloLossWrapper(torch.nn.Module):
                 # YOLO v5 outputs: (batch_size, 85, num_anchors)
                 #   - 85 = 4 bbox (xywh) + 1 obj + 80 classes
 
-                if isinstance(preds, (list, tuple)):
+                # Accept dynamic class counts instead of hard-coding 84/85
+                expected_no_obj = 4 + self.num_classes          # v8 style (no objectness)
+                expected_with_obj = 5 + self.num_classes        # v5 style (with objectness)
+                valid_feature_dims = {expected_no_obj, expected_with_obj}
+                min_reasonable_feat = 5       # at least 4 coords + 1 score/class
+                max_reasonable_feat = 512     # anchors dimension is much larger (thousands)
+                seen_shapes: list[str] = []
+
+                def tensor_to_preds(t: torch.Tensor) -> list[torch.Tensor]:
+                    """Normalize various tensor shapes to (B, N, F)."""
+                    out: list[torch.Tensor] = []
+                    seen_shapes.append(str(tuple(t.shape)))
+
+                    if t.dim() == 3:
+                        # (B, F, N) or (B, N, F)
+                        if min_reasonable_feat <= t.size(1) <= max_reasonable_feat:
+                            out.append(t.permute(0, 2, 1))
+                        elif min_reasonable_feat <= t.size(2) <= max_reasonable_feat:
+                            out.append(t)
+                    elif t.dim() == 4:
+                        # Try each axis (except batch) as feature dim
+                        b, d1, d2, d3 = t.shape
+                        candidates = [
+                            (1, d1, (0, 2, 3, 1)),
+                            (2, d2, (0, 1, 3, 2)),
+                            (3, d3, (0, 1, 2, 3)),  # already last
+                        ]
+                        for axis_idx, feat_dim, perm in candidates:
+                            if min_reasonable_feat <= feat_dim <= max_reasonable_feat:
+                                permuted = t.permute(*perm) if perm != (0, 1, 2, 3) else t
+                                out.append(permuted.reshape(b, -1, feat_dim))
+                                break
+                    return out
+
+                def collect_tensors(obj) -> list[torch.Tensor]:
+                    out: list[torch.Tensor] = []
+                    if torch.is_tensor(obj):
+                        out.extend(tensor_to_preds(obj))
+                        return out
+                    if isinstance(obj, (list, tuple)):
+                        for item in obj:
+                            out.extend(collect_tensors(item))
+                        return out
+                    if isinstance(obj, dict):
+                        for key in ("preds", "pred", "output", "outputs", "raw"):
+                            if key in obj:
+                                out.extend(collect_tensors(obj[key]))
+                        return out
+                    return out
+
+                pred_tensors: list[torch.Tensor] = collect_tensors(preds)
+
+                # Fallback: try calling underlying .model if nothing found
+                if not pred_tensors and hasattr(self.model, "model"):
+                    try:
+                        raw_preds = self.model.model(x)
+                        pred_tensors = collect_tensors(raw_preds)
+                    except Exception:
+                        pass
+
+                if not pred_tensors:
                     # Multiple prediction heads - concatenate along spatial dimension
                     # Handle nested lists/tuples from some Ultralytics variants.
-                    pred_tensors = []
-
-                    def collect_tensors(obj):
-                        if torch.is_tensor(obj):
-                            if obj.dim() == 3 and (obj.size(1) in [84, 85] or obj.size(2) in [84, 85]):
-                                pred_tensors.append(obj)
-                            return
-                        if isinstance(obj, (list, tuple)):
-                            for item in obj:
-                                collect_tensors(item)
-                            return
-                        if isinstance(obj, dict):
-                            for key in ("preds", "output", "outputs"):
-                                if key in obj:
-                                    collect_tensors(obj[key])
-                                    return
-
-                    collect_tensors(preds)
-
-                    if not pred_tensors:
                         raise ValueError(
                             "No valid prediction tensors found for attack loss. "
-                            "Expected YOLO raw preds with 84/85 features."
+                            f"Expected YOLO raw preds with ~{valid_feature_dims} features "
+                            f"(found none with feature dim in [{min_reasonable_feat}, {max_reasonable_feat}]). "
+                            f"Seen shapes: {seen_shapes}"
                         )
 
-                    normalized = []
-                    for pred in pred_tensors:
-                        if pred.size(1) in [84, 85]:
-                            normalized.append(pred)
-                        elif pred.size(2) in [84, 85]:
-                            normalized.append(pred.permute(0, 2, 1))
+                # Group tensors by feature dimension to avoid mismatched cat
+                by_feat: dict[int, list[torch.Tensor]] = {}
+                for pred in pred_tensors:
+                    feat_dim = pred.size(2)
+                    if feat_dim not in valid_feature_dims and not (min_reasonable_feat <= feat_dim <= max_reasonable_feat):
+                        continue
+                    by_feat.setdefault(int(feat_dim), []).append(pred)
 
-                    if not normalized:
-                        raise ValueError(
-                            "No compatible YOLO prediction tensors found for attack loss."
-                        )
+                if not by_feat:
+                    raise ValueError(
+                        f"No compatible YOLO prediction tensors found for attack loss. "
+                        f"Expected feature dimension in {valid_feature_dims} or "
+                        f"any value within [{min_reasonable_feat}, {max_reasonable_feat}]. "
+                        f"Seen shapes: {seen_shapes}"
+                    )
 
-                    concatenated_preds = torch.cat(normalized, dim=2)
-                    # Transpose to (batch, total_anchors, 84/85) for DetectionAttackLoss
-                    return concatenated_preds.permute(0, 2, 1)
-                else:
-                    # Single prediction tensor: (batch, features, num_anchors)
-                    # Transpose to (batch, num_anchors, features)
-                    if preds.dim() == 3 and preds.size(1) in [84, 85]:
-                        # YOLO v8/v5 format: (batch, 84/85, num_anchors)
+                # Prefer the expected feature dims; otherwise take the largest group
+                chosen_feat = None
+                for f in valid_feature_dims:
+                    if f in by_feat:
+                        chosen_feat = f
+                        break
+                if chosen_feat is None:
+                    # Choose the feature size with the most tensors
+                    chosen_feat = max(by_feat.items(), key=lambda kv: len(kv[1]))[0]
+
+                tensors_to_cat = by_feat[chosen_feat]
+                concatenated_preds = torch.cat(tensors_to_cat, dim=1)  # (B, total_anchors, F_chosen)
+                return concatenated_preds
+            else:
+                # Single prediction tensor: (batch, features, num_anchors)
+                # Transpose to (batch, num_anchors, features)
+                if preds.dim() == 3:
+                    if min_reasonable_feat <= preds.size(1) <= max_reasonable_feat:
+                        # YOLO v8/v5 format: (batch, features, num_anchors)
                         return preds.permute(0, 2, 1)
-                    else:
-                        # Already in correct format or unknown format
+                    if min_reasonable_feat <= preds.size(2) <= max_reasonable_feat:
+                        # Already (batch, anchors, features)
                         return preds
+                else:
+                    # Already in correct format or unknown format
+                    return preds
 
             # Normal inference mode: Apply NMS and postprocessing
             self.detection_predictor.model = self.model

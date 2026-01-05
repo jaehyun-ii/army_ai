@@ -103,6 +103,7 @@ class DetectionAttackLoss(nn.Module):
         # YOLO v8+:    84 (4 bbox + 80 classes, no objectness)
         has_objectness = (num_features == 85)
 
+        # Initialize accumulators (avoid in-place ops on leaf tensors)
         batch_loss_targeted = torch.tensor(0.0, device=device)
         batch_loss_agnostic = torch.tensor(0.0, device=device)
 
@@ -132,6 +133,16 @@ class DetectionAttackLoss(nn.Module):
             # box_iou requires xyxy format (x1, y1, x2, y2)
             pred_boxes = xywh2xyxy(pred_boxes_xywh)  # (num_proposals, 4)
 
+            # DEBUG: Check if predictions are already sigmoidized
+            import logging
+            logger = logging.getLogger(__name__)
+            if b == 0:  # Only log first batch item
+                if has_objectness:
+                    logger.debug(f"[AttackLoss] Raw obj scores (sample): min={preds[:, 4].min():.4f}, max={preds[:, 4].max():.4f}, mean={preds[:, 4].mean():.4f}")
+                    logger.debug(f"[AttackLoss] Raw class scores (sample): min={preds[:, 5:].min():.4f}, max={preds[:, 5:].max():.4f}, mean={preds[:, 5:].mean():.4f}")
+                else:
+                    logger.debug(f"[AttackLoss] Raw class scores (sample): min={preds[:, 4:].min():.4f}, max={preds[:, 4:].max():.4f}, mean={preds[:, 4:].mean():.4f}")
+
             if has_objectness:
                 # YOLO v5 format: [cx, cy, w, h, obj, class_0, ..., class_79]
                 obj_scores = torch.sigmoid(preds[:, 4])  # (num_proposals,)
@@ -141,6 +152,10 @@ class DetectionAttackLoss(nn.Module):
                 class_scores = torch.sigmoid(preds[:, 4:])  # (num_proposals, 80)
                 # Use max class confidence as objectness proxy
                 obj_scores = class_scores.max(dim=1)[0]  # (num_proposals,)
+
+            if b == 0:  # Only log first batch item
+                logger.debug(f"[AttackLoss] After sigmoid - obj_scores: min={obj_scores.min():.4f}, max={obj_scores.max():.4f}, mean={obj_scores.mean():.4f}")
+                logger.debug(f"[AttackLoss] After sigmoid - class_scores: min={class_scores.min():.4f}, max={class_scores.max():.4f}, mean={class_scores.mean():.4f}")
 
             # Step 1: Filter boxes by IoU with pseudo-GT
             ious = box_iou(pred_boxes, gt_box_single).squeeze(-1)  # (num_proposals,)
@@ -201,17 +216,18 @@ class DetectionAttackLoss(nn.Module):
                     top_k_agnostic_boxes, _ = torch.topk(agnostic_scores, k)
                     sum_agnostic_scores = torch.sum(top_k_agnostic_boxes)
 
-                batch_loss_targeted += sum_targeted_scores
-                batch_loss_agnostic += sum_agnostic_scores
+                batch_loss_targeted = batch_loss_targeted + sum_targeted_scores
+                batch_loss_agnostic = batch_loss_agnostic + sum_agnostic_scores
 
         # Step 5: Calculate final losses (average over batch)
+        # Use squeeze() to convert from shape (1,) to scalar for cleaner output
         final_targeted_loss = (
-            (batch_loss_targeted / batch_size) if batch_size > 0
-            else torch.tensor(0.0, device=device)
+            (batch_loss_targeted / batch_size).squeeze() if batch_size > 0
+            else torch.zeros(1, device=device, requires_grad=True).squeeze()
         )
         final_agnostic_loss = (
-            (batch_loss_agnostic / batch_size) if batch_size > 0
-            else torch.tensor(0.0, device=device)
+            (batch_loss_agnostic / batch_size).squeeze() if batch_size > 0
+            else torch.zeros(1, device=device, requires_grad=True).squeeze()
         )
 
         # Total loss is weighted combination
