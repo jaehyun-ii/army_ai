@@ -105,7 +105,7 @@ export function AdminSidebar({
             />
           </div>
           <div className="flex flex-col">
-            <p className="text-lg font-bold text-secondary">육군인공지능센터</p>
+            <p className="text-lg font-bold text-secondary">육군시험평가단</p>
             <p className="text-xs text-error">관리자 모드</p>
           </div>
         </div>

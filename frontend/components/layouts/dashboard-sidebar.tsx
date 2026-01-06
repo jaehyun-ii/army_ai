@@ -105,7 +105,7 @@ export function DashboardSidebar({
             />
           </div>
           <div className="flex flex-col">
-            <p className="text-sm font-bold text-on-surface">육군인공지능센터</p>
+            <p className="text-sm font-bold text-on-surface">육군시험평가단</p>
           </div>
         </div>
       </div>
