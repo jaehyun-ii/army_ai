@@ -1,3 +1,0 @@
-# This file ensures the storage directory is tracked by git
-# The directory itself is needed for Docker volume mounts
-# Actual storage files are ignored by .gitignore
