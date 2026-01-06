@@ -248,9 +248,11 @@ services:
       - "${CARLA_CLIENT_BACKEND_JUPYTER_PORT}:8888"  # Jupyter/API port
       - "${CARLA_CLIENT_BACKEND_SERVICE_PORT}:1455"  # Additional service port
     volumes:
-      - ./carla_back/exports:/workspace/exports
-      - ./carla_back/imports:/workspace/imports
-      - ./carla_back/logs:/workspace/logs
+      # Mount unified 3D storage
+      - ./storage/3d:/workspace/storage:rw
+      - ./storage/3d/exports:/workspace/exports:rw
+      - ./storage/3d/imports:/workspace/imports:rw
+      - ./storage/3d/logs:/workspace/logs:rw
     networks:
       - army_ai_network_dev
     deploy:

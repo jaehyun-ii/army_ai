@@ -44,15 +44,32 @@ async def get_file(storage_key: str):
     logger.info(f"Resolved file path: {file_path}")
     logger.info(f"File exists: {file_path.exists()}")
 
-    # Fallback: 파일이 없고 storage_key에 "datasets/"가 없으면 추가해보기
-    if not file_path.exists() and not storage_key.startswith("datasets/"):
-        fallback_path = storage_root / "datasets" / storage_key
-        logger.info(f"Trying fallback path: {fallback_path}")
-        if fallback_path.exists():
-            file_path = fallback_path
+    # Fallback paths for backward compatibility
+    if not file_path.exists():
+        fallback_paths = []
+
+        # Try 2D paths if not already prefixed
+        if not storage_key.startswith(("2d/", "3d/")):
+            fallback_paths.extend([
+                storage_root / "2d" / storage_key,
+                storage_root / "2d" / "datasets" / storage_key,
+                storage_root / "datasets" / storage_key,  # Legacy
+            ])
+
+        # Try adding datasets/ if missing
+        if not storage_key.startswith("datasets/") and "/" not in storage_key:
+            fallback_paths.append(storage_root / "2d" / "datasets" / storage_key)
+
+        for fallback_path in fallback_paths:
+            logger.info(f"Trying fallback path: {fallback_path}")
+            if fallback_path.exists():
+                file_path = fallback_path
+                logger.info(f"Found file at fallback path: {fallback_path}")
+                break
 
     # 파일 존재 여부 확인
     if not file_path.exists():
+        logger.error(f"File not found after all fallback attempts: {storage_key}")
         raise HTTPException(status_code=404, detail=f"File not found: {storage_key}")
 
     if not file_path.is_file():

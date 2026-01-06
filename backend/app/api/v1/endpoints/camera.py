@@ -626,7 +626,7 @@ async def start_capture_session(
         cap = realtime_service.active_captures.get(run_id_str)
 
         # Create storage directory for this capture run
-        storage_dir = settings.get_storage_path("rt_captures", run_id_str)
+        storage_dir = settings.get_storage_path("rt", run_id_str)
         storage_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created storage directory: {storage_dir}")
 
@@ -751,7 +751,7 @@ async def start_capture_session(
                             f.write(buffer.tobytes())
 
                         # Update frame_data with storage_key (relative path from STORAGE_ROOT)
-                        relative_path = f"rt_captures/{run_id_str}/{file_name}"
+                        relative_path = f"rt/{run_id_str}/{file_name}"
                         frame_data["storage_key"] = relative_path
 
                         # Save frame metadata to database

@@ -42,11 +42,17 @@ class EstimatorLoaderService:
 
         # Try storage_key first (may be absolute path for external models)
         model_path = Path(weights_artifact.storage_key)
-        if not model_path.exists():
-            # Fall back to storage_path property (STORAGE_ROOT + storage_key + file_name)
+        if not model_path.is_absolute() or not model_path.exists():
+            # Use storage_path property (STORAGE_ROOT/models/{storage_key}/{file_name})
             model_path = Path(weights_artifact.storage_path)
+            logger.info(f"Using storage_path: {model_path}")
+
             if not model_path.exists():
-                raise FileNotFoundError(f"Model file not found: {model_path}")
+                raise FileNotFoundError(
+                    f"Model file not found at {model_path}. "
+                    f"storage_key={weights_artifact.storage_key}, "
+                    f"file_name={weights_artifact.file_name}"
+                )
 
         # 3. Get parameters
         framework = schemas.EstimatorFramework(model.framework)

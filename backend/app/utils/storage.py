@@ -15,18 +15,24 @@ from PIL import Image
 class StorageManager:
     """Manage local file storage for datasets."""
 
-    def __init__(self, base_storage_path: Optional[str] = None):
+    def __init__(self, base_storage_path: Optional[str] = None, storage_type: str = "2d"):
         """Initialize storage manager.
 
         Args:
             base_storage_path: Base path for storing datasets.
-                If None, uses settings.STORAGE_ROOT from centralized config.
+                If None, uses settings.STORAGE_2D_ROOT or STORAGE_3D_ROOT based on storage_type.
+            storage_type: "2d" or "3d" to determine which storage root to use.
         """
         if base_storage_path is None:
             from app.core.config import settings
-            base_storage_path = settings.STORAGE_ROOT
+            # Use 2D or 3D storage root based on type
+            if storage_type == "3d":
+                base_storage_path = settings.STORAGE_3D_ROOT
+            else:
+                base_storage_path = settings.STORAGE_2D_ROOT
 
         self.storage_root = Path(base_storage_path)
+        self.storage_type = storage_type
         self.base_path = self.storage_root / "datasets"
         self.base_path.mkdir(parents=True, exist_ok=True)
 
@@ -127,8 +133,15 @@ class StorageManager:
                 if file_path.suffix.lower() in image_extensions:
                     # Get relative path from dataset root
                     relative_path = file_path.relative_to(dataset_path)
-                    # Use relative path from STORAGE_ROOT for storage_key
-                    storage_key = str(file_path.relative_to(self.storage_root))
+                    # Use relative path from main STORAGE_ROOT for storage_key
+                    # This includes the 2d/ or 3d/ prefix automatically
+                    from app.core.config import settings
+                    main_storage_root = Path(settings.STORAGE_ROOT)
+                    try:
+                        storage_key = str(file_path.relative_to(main_storage_root))
+                    except ValueError:
+                        # Fallback: use relative to storage_root if not under main root
+                        storage_key = f"{self.storage_type}/{file_path.relative_to(self.storage_root)}"
 
                     # Get image dimensions
                     width, height = None, None

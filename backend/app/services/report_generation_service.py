@@ -25,8 +25,9 @@ class ReportGenerationService:
     """적대적 공격 보고서 생성 서비스"""
 
     def __init__(self):
+        # Use STORAGE_ROOT for evaluate directory (shared between 2D/3D)
         self.storage_root = Path(settings.STORAGE_ROOT)
-        self.reports_dir = self.storage_root / "reports"
+        self.reports_dir = self.storage_root / "evaluate"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
         # 템플릿 경로

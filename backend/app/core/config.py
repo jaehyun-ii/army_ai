@@ -91,6 +91,10 @@ class Settings(BaseSettings):
 
     # Storage
     STORAGE_ROOT: str = "./storage"
+    STORAGE_2D_ROOT: str = "./storage/2d"  # 2D datasets, patches
+    STORAGE_3D_ROOT: str = "./storage/3d"  # 3D CARLA datasets, patches
+    STORAGE_MODELS_ROOT: str = "./storage/models"  # Model weights (shared)
+    STORAGE_EVALUATE_ROOT: str = "./storage/evaluate"  # Evaluation results (shared)
     STORAGE_TYPE: str = "local"  # local or s3
     MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
     ALLOWED_IMAGE_TYPES: List[str] = ["image/jpeg", "image/png", "image/bmp"]
@@ -240,8 +244,22 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT == Environment.DEVELOPMENT
 
     def get_storage_path(self, *paths: str) -> Path:
-        """Get storage path."""
+        """Get storage path (defaults to full storage root)."""
         base_path = Path(self.STORAGE_ROOT)
+        if paths:
+            return base_path.joinpath(*paths)
+        return base_path
+
+    def get_2d_storage_path(self, *paths: str) -> Path:
+        """Get 2D storage path."""
+        base_path = Path(self.STORAGE_2D_ROOT)
+        if paths:
+            return base_path.joinpath(*paths)
+        return base_path
+
+    def get_3d_storage_path(self, *paths: str) -> Path:
+        """Get 3D storage path."""
+        base_path = Path(self.STORAGE_3D_ROOT)
         if paths:
             return base_path.joinpath(*paths)
         return base_path

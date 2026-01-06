@@ -55,11 +55,11 @@ class DatasetStatisticsService:
                 continue
 
             try:
-                # Convert to relative path from STORAGE_ROOT
+                # Convert to relative path from STORAGE_ROOT (main root, includes 2d/3d prefix)
                 from app.core.config import settings
-                storage_root = Path(settings.STORAGE_ROOT)
+                storage_root_main = Path(settings.STORAGE_ROOT)
                 try:
-                    storage_key = str(image_path.relative_to(storage_root))
+                    storage_key = str(image_path.relative_to(storage_root_main))
                 except ValueError:
                     # If image_path is not relative to storage_root, use absolute path as fallback
                     logger.warning("Image path %s is not relative to STORAGE_ROOT, using absolute path", image_path)

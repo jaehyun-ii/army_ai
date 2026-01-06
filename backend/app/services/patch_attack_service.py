@@ -40,7 +40,9 @@ class PatchAttackService:
     """
 
     def __init__(self):
-        self.storage_root = Path(settings.STORAGE_ROOT)
+        # Use 2D storage root for 2D patch attacks
+        self.storage_root = Path(settings.STORAGE_2D_ROOT)
+        self.storage_root_main = Path(settings.STORAGE_ROOT)  # For storage_key resolution
         self.attack_datasets_dir = self.storage_root / "attack_datasets"
         self.attack_datasets_dir.mkdir(parents=True, exist_ok=True)
 
@@ -215,7 +217,7 @@ class PatchAttackService:
                     obj_in=schemas.ImageCreate(
                         dataset_id=output_dataset.id,
                         file_name=file_name,
-                        storage_key=str(img_path.relative_to(self.storage_root)),
+                        storage_key=str(img_path.relative_to(self.storage_root_main)),
                         width=width,
                         height=height,
                         mime_type="image/png",

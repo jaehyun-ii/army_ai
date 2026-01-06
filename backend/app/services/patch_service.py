@@ -135,7 +135,9 @@ class PatchService:
     """
 
     def __init__(self):
-        self.storage_root = Path(settings.STORAGE_ROOT)
+        # Use 2D storage root for patches (patches are 2D-only)
+        self.storage_root = Path(settings.STORAGE_2D_ROOT)
+        self.storage_root_main = Path(settings.STORAGE_ROOT)  # For storage_key resolution
         self.patches_dir = self.storage_root / "patches"
         self.patches_dir.mkdir(parents=True, exist_ok=True)
 
@@ -612,7 +614,7 @@ class PatchService:
                         "shape": list(patch.shape),
                         "attack_method": attack_method,
                     },
-                    storage_key=str(patch_path.relative_to(self.storage_root)),
+                    storage_key=str(patch_path.relative_to(self.storage_root_main)),
                     file_name=patch_filename,
                     size_bytes=file_size,
                 ),
