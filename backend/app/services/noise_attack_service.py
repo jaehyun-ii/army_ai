@@ -1169,7 +1169,7 @@ class NoiseAttackService:
         loaded_images = []
         for img_record in images_db:
             # Construct full path
-            img_path = self.storage_root / img_record.storage_key
+            img_path = self.storage_root_main / img_record.storage_key
 
             if not img_path.exists():
                 logger.warning(f"Image file not found: {img_path}")

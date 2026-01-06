@@ -94,7 +94,7 @@ class PatchAttackService:
                 raise NotFoundError(f"Patch {patch_id} not found")
 
             # Load patch file
-            patch_path = self.storage_root / patch_record.storage_key
+            patch_path = self.storage_root_main / patch_record.storage_key
             if not patch_path.exists():
                 raise NotFoundError(f"Patch file not found: {patch_path}")
 
@@ -474,7 +474,7 @@ class PatchAttackService:
         loaded_images = []
         for img_record in images_db:
             # Construct full path
-            img_path = self.storage_root / img_record.storage_key
+            img_path = self.storage_root_main / img_record.storage_key
 
             if not img_path.exists():
                 logger.warning(f"Image file not found: {img_path}")

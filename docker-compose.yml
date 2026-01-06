@@ -188,83 +188,83 @@ services:
       - army_ai_network_dev
     command: npm run dev
 
-  # =====================
-  # CARLA Simulator
-  # GPU Device 3 (dedicated)
-  # =====================
-  carla_simulator:
-    image: army_ai_sim:0.0.3
-    container_name: army_ai_sim_dev
-    restart: unless-stopped
-    tty: true
-    stdin_open: true
-    privileged: true
-    shm_size: "8g"
-    mem_limit: 16g
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=3
-      - NVIDIA_DRIVER_CAPABILITIES=all
-    ports:
-      - "${CARLA_SIMULATOR_RPC_PORT}:2000"  # CARLA RPC port
-      - "${CARLA_SIMULATOR_STREAMING_PORT1}:2001"  # CARLA streaming port 1
-      - "${CARLA_SIMULATOR_STREAMING_PORT2}:2002"  # CARLA streaming port 2
-    networks:
-      - army_ai_network_dev
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['3']
-              capabilities: [gpu]
-    command: >
-      /bin/bash CarlaUE4.sh
-      -RenderOffScreen
-      -nosound
-      -vulkan
-      -carla-rpc-port=2000
-      -carla-streaming-port=0
-      -quality-level=low
+  # # =====================
+  # # CARLA Simulator
+  # # GPU Device 3 (dedicated)
+  # # =====================
+  # carla_simulator:
+  #   image: army_ai_sim:0.0.3
+  #   container_name: army_ai_sim_dev
+  #   restart: unless-stopped
+  #   tty: true
+  #   stdin_open: true
+  #   privileged: true
+  #   shm_size: "8g"
+  #   mem_limit: 16g
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=3
+  #     - NVIDIA_DRIVER_CAPABILITIES=all
+  #   ports:
+  #     - "${CARLA_SIMULATOR_RPC_PORT}:2000"  # CARLA RPC port
+  #     - "${CARLA_SIMULATOR_STREAMING_PORT1}:2001"  # CARLA streaming port 1
+  #     - "${CARLA_SIMULATOR_STREAMING_PORT2}:2002"  # CARLA streaming port 2
+  #   networks:
+  #     - army_ai_network_dev
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ['3']
+  #             capabilities: [gpu]
+  #   command: >
+  #     /bin/bash CarlaUE4.sh
+  #     -RenderOffScreen
+  #     -nosound
+  #     -vulkan
+  #     -carla-rpc-port=2000
+  #     -carla-streaming-port=0
+  #     -quality-level=low
 
-  # =====================
-  # CARLA Client Backend
-  # GPU Device 2 (dedicated)
-  # =====================
-  carla_client_backend:
-    image: army_carla_client_backend:0.0.2
-    container_name: army_ai_carla_backend_dev
-    restart: unless-stopped
-    tty: true
-    stdin_open: true
-    shm_size: "16g"
-    ulimits:
-      memlock: -1  # Unlimited memory locking
-      stack: 67108864  # 64MB stack size
-    working_dir: /workspace
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=2
-      - NVIDIA_DRIVER_CAPABILITIES=all
-    ports:
-      - "${CARLA_CLIENT_BACKEND_JUPYTER_PORT}:8888"  # Jupyter/API port
-      - "${CARLA_CLIENT_BACKEND_SERVICE_PORT}:1455"  # Additional service port
-    volumes:
-      # Mount unified 3D storage
-      - ./storage/3d:/workspace/storage:rw
-      - ./storage/3d/exports:/workspace/exports:rw
-      - ./storage/3d/imports:/workspace/imports:rw
-      - ./storage/3d/logs:/workspace/logs:rw
-    networks:
-      - army_ai_network_dev
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['2']
-              capabilities: [gpu]
-    depends_on:
-      - carla_simulator
-    command: python /workspace/main.py --port 8888 --host 0.0.0.0 --carla_host carla_simulator --carla_port 2000
+  # # =====================
+  # # CARLA Client Backend
+  # # GPU Device 2 (dedicated)
+  # # =====================
+  # carla_client_backend:
+  #   image: army_carla_client_backend:0.0.2
+  #   container_name: army_ai_carla_backend_dev
+  #   restart: unless-stopped
+  #   tty: true
+  #   stdin_open: true
+  #   shm_size: "16g"
+  #   ulimits:
+  #     memlock: -1  # Unlimited memory locking
+  #     stack: 67108864  # 64MB stack size
+  #   working_dir: /workspace
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=2
+  #     - NVIDIA_DRIVER_CAPABILITIES=all
+  #   ports:
+  #     - "${CARLA_CLIENT_BACKEND_JUPYTER_PORT}:8888"  # Jupyter/API port
+  #     - "${CARLA_CLIENT_BACKEND_SERVICE_PORT}:1455"  # Additional service port
+  #   volumes:
+  #     # Mount unified 3D storage
+  #     - ./storage/3d:/workspace/storage:rw
+  #     - ./storage/3d/exports:/workspace/exports:rw
+  #     - ./storage/3d/imports:/workspace/imports:rw
+  #     - ./storage/3d/logs:/workspace/logs:rw
+  #   networks:
+  #     - army_ai_network_dev
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ['2']
+  #             capabilities: [gpu]
+  #   depends_on:
+  #     - carla_simulator
+  #   command: python /workspace/main.py --port 8888 --host 0.0.0.0 --carla_host carla_simulator --carla_port 2000
 
 # =====================
 # Networks
