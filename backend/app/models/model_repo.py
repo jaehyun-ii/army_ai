@@ -114,7 +114,7 @@ class ODModelArtifact(Base):
         """Get full storage path for artifact."""
         from app.core.config import settings
         from pathlib import Path
-        return str(Path(settings.STORAGE_ROOT) / "models" / self.storage_key / self.file_name)
+        return str(Path(settings.STORAGE_MODELS_ROOT) / self.storage_key / self.file_name)
 
 
 # Deployment model disabled (table not in use)

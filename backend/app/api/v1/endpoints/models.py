@@ -155,7 +155,7 @@ async def upload_model_for_estimator(
 
     # Save the model file
     from app.core.config import settings
-    storage_base = Path(settings.STORAGE_ROOT) / "models"
+    storage_base = Path(settings.STORAGE_MODELS_ROOT)
     model_dir = storage_base / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 

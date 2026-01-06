@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     STORAGE_ROOT: str = "./storage"
     STORAGE_2D_ROOT: str = "./storage/2d"  # 2D datasets, patches
     STORAGE_3D_ROOT: str = "./storage/3d"  # 3D CARLA datasets, patches
-    STORAGE_MODELS_ROOT: str = "./storage/models"  # Model weights (shared)
+    STORAGE_MODELS_ROOT: str = "./storage/model"  # Model weights (shared)
     STORAGE_EVALUATE_ROOT: str = "./storage/evaluate"  # Evaluation results (shared)
     STORAGE_TYPE: str = "local"  # local or s3
     MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
