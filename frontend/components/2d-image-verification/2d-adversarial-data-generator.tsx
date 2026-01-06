@@ -524,7 +524,8 @@ export function AdversarialDataGeneratorUpdated() {
     // { value: "pgd", label: "PGD (Projected Gradient Descent)", desc: "반복적 그래디언트 기반 적대적 공격" },
     // { value: "fgsm", label: "FGSM (Fast Gradient Sign Method)", desc: "빠른 그래디언트 기반 적대적 공격" },
     { value: "universal_noise", label: "Universal Noise (범용 노이즈)", desc: "모든 이미지에 적용 가능한 범용 적대적 노이즈 (Pseudo-GT, Object Masking)" },
-    { value: "noise_osfd", label: "Noise OSFD (특징 왜곡)", desc: "특징 레벨 왜곡을 통한 적대적 노이즈 (RRB Augmentation)" }
+    { value: "noise_osfd", label: "Noise OSFD (특징 왜곡)", desc: "특징 레벨 왜곡을 통한 적대적 노이즈 (RRB Augmentation)" },
+    { value: "distortion_aware", label: "Distortion Aware (왜곡 인지)", desc: "NCC 기반 왜곡 제어를 통한 이미지별 적대적 공격" }
   ]
 
   const targetClasses = [
@@ -748,7 +749,7 @@ export function AdversarialDataGeneratorUpdated() {
         training_id: attackType === "patch" ? selectedPatch : undefined,
         attack_type: attackType,
         patch_scale: attackType === "patch" ? (patchScale / 100) : undefined,  // Convert percentage to ratio
-        noise_method: attackType === "noise" ? noiseConfig.method as ("pgd" | "fgsm" | "universal_noise" | "noise_osfd") : undefined,
+        noise_method: attackType === "noise" ? noiseConfig.method as ("pgd" | "fgsm" | "universal_noise" | "noise_osfd" | "distortion_aware") : undefined,
         intensity_level: attackType === "noise" ? noiseConfig.intensityLevel : undefined,
         target_class: targetClass || undefined,  // ✅ Send target_class for both patch and noise attacks
         model_id: attackType === "noise" ? selectedModel : undefined,  // Only send model_id for noise attacks

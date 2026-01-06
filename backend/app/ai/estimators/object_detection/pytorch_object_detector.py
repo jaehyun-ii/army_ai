@@ -376,17 +376,10 @@ class PyTorchObjectDetector(ObjectDetectorMixin, PyTorchEstimator):
                 if hasattr(self._model, 'return_raw_predictions'):
                     self._model.return_raw_predictions = True
 
-                # Debug: Check input stats before model call
-                logger.debug(f"Input x_preprocessed: mean={x_preprocessed.mean().item():.6f}, std={x_preprocessed.std().item():.6f}, requires_grad={x_preprocessed.requires_grad}")
-
                 # Get model predictions (wrapper in training mode returns raw predictions)
                 # For YOLO models with wrapper, this will return raw predictions
                 # Format: (batch_size, num_proposals, 85) for YOLO
                 model_outputs = self._model(x_preprocessed)
-
-                # Debug: Check output stats
-                if isinstance(model_outputs, torch.Tensor):
-                    logger.debug(f"Output model_outputs: mean={model_outputs.mean().item():.6f}, std={model_outputs.std().item():.6f}, requires_grad={model_outputs.requires_grad}")
 
                 # Restore normal mode
                 if hasattr(self._model, 'return_raw_predictions'):

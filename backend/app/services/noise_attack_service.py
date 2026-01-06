@@ -30,6 +30,7 @@ from app.ai.attacks.evasion import (
     # PyTorch versions (primary, feature-complete implementations)
     UniversalNoiseAttackPyTorch,
     NoiseOSFDPyTorch,
+    DistortionAwareAttackPyTorch,
 )
 from app.ai.attacks.evasion.fast_gradient_pytorch import FastGradientMethodPyTorch
 from app.ai.attacks.evasion.projected_gradient_descent_pytorch import ProjectedGradientDescentPyTorch
@@ -45,7 +46,7 @@ def get_attack_intensity_preset(attack_method: str, intensity_level: str) -> dic
     공격 강도 레벨에 따른 epsilon과 iterations 프리셋을 반환합니다.
 
     Args:
-        attack_method: 공격 방법 ("fgsm", "pgd", "universal_noise", "noise_osfd")
+        attack_method: 공격 방법 ("fgsm", "pgd", "universal_noise", "noise_osfd", "distortion_aware")
         intensity_level: 강도 레벨 ("weak", "medium", "strong")
 
     Returns:
@@ -68,9 +69,14 @@ def get_attack_intensity_preset(attack_method: str, intensity_level: str) -> dic
             "strong": {"epsilon": 12.0, "iterations": 500, "description": "강한 범용 노이즈 (효과성 우선)"},
         },
         "noise_osfd": {
-            "weak": {"epsilon": 4.0, "iterations": 50, "description": "약한 OSFD (은폐성 우선)"},
-            "medium": {"epsilon": 8.0, "iterations": 100, "description": "보통 OSFD (AEGIS 논문 기본값)"},
-            "strong": {"epsilon": 12.0, "iterations": 150, "description": "강한 OSFD (효과성 우선)"},
+            "weak": {"epsilon": 4.0, "iterations": 100 , "description": "약한 OSFD (은폐성 우선)"},
+            "medium": {"epsilon": 8.0, "iterations": 300, "description": "보통 OSFD (AEGIS 논문 기본값)"},
+            "strong": {"epsilon": 12.0, "iterations": 500, "description": "강한 OSFD (효과성 우선)"},
+        },
+        "distortion_aware": {
+            "weak": {"epsilon": 255.0, "iterations": 1000, "description": "약한 Distortion-Aware (NCC=0.7, 높은 은폐성)"},
+            "medium": {"epsilon": 255.0, "iterations": 3000, "description": "보통 Distortion-Aware (NCC=0.6, 논문 기본값)"},
+            "strong": {"epsilon": 255.0, "iterations": 5000, "description": "강한 Distortion-Aware (NCC=0.5, 최대 효과)"},
         },
     }
 
@@ -83,7 +89,7 @@ def get_noise_attack_config(attack_method: str, iterations: int, epsilon: float)
     노이즈 공격 타입별 최적의 스텝 크기(alpha)와 스케줄러 설정을 반환합니다.
 
     Args:
-        attack_method: 공격 방법 ("fgsm", "pgd", "universal_noise", "noise_osfd")
+        attack_method: 공격 방법 ("fgsm", "pgd", "universal_noise", "noise_osfd", "distortion_aware")
         iterations: 반복 횟수
         epsilon: 최대 perturbation 크기
 
@@ -107,7 +113,7 @@ def get_noise_attack_config(attack_method: str, iterations: int, epsilon: float)
         },
         "universal_noise": {
             # Universal Noise: 범용 perturbation 학습
-            "alpha": epsilon / 10,  # epsilon의 1/10 (OSFD와 동일)
+            "alpha": 0.255,  # Fixed learning rate: 0.001 in [0,1] scale = 0.255 in [0,255] scale
             "scheduler_type": "cosine",
             "scheduler_params": {
                 "T_max": iterations,
@@ -124,6 +130,19 @@ def get_noise_attack_config(attack_method: str, iterations: int, epsilon: float)
                 "eta_min": 0.0,  # 최소 학습률 0
             },
             "description": "Object-aware Spatial Feature Distortion (OSFD)",
+        },
+        "distortion_aware": {
+            # Distortion-Aware: NCC 기반 왜곡 제어 (attack_detector paper)
+            # attack_detector uses step=100 in [0,255] scale
+            # Convert to [0,1] scale: 100/255 ≈ 0.392
+            "alpha": 0.392,  # Fixed step size matching attack_detector
+            "scheduler_type": None,  # No scheduler (fixed step like attack_detector)
+            "scheduler_params": {},
+            "attack_mode": "image_specific",  # Image-specific attack
+            "use_model_loss": True,  # Use YOLO training loss (L_box + L_cls + L_dfl)
+            "apply_mask": True,  # Apply object masking
+            "ncc_threshold": 0.6,  # Default NCC threshold (configurable per preset)
+            "description": "Distortion-Aware Attack (NCC-based, Image-Specific)",
         },
     }
 
@@ -163,6 +182,8 @@ class NoiseAttackService:
         iterations: Optional[int] = None,
         intensity_level: Optional[str] = None,
         target_class: Optional[str] = None,
+        top_k_detections: Optional[int] = None,
+        confidence_threshold: Optional[float] = None,
         session_id: Optional[str] = None,
         current_user_id: Optional[UUID] = None,
     ) -> Tuple[schemas.AttackDataset2DResponse, UUID]:
@@ -180,6 +201,11 @@ class NoiseAttackService:
             iterations: Number of iterations for PGD (optional, auto-configured if None)
             intensity_level: Attack intensity level ("weak", "medium", "strong", optional)
             target_class: Target class name to attack (e.g., 'person'). If None, attack all objects.
+            top_k_detections: For universal_noise/noise_osfd - number of detections per image:
+                             -1 = all detections above threshold (multi-target, default)
+                              1 = single highest confidence detection (AEGIS-style)
+                              N = top N detections (only when y=None/pseudo-GT mode)
+            confidence_threshold: Minimum confidence for pseudo-GT detections (0.0-1.0, default 0.0)
             session_id: SSE session ID for progress updates
             current_user_id: User ID for ownership
 
@@ -198,7 +224,7 @@ class NoiseAttackService:
 
         try:
             # Validate attack method
-            valid_methods = ["fgsm", "pgd", "universal_noise", "noise_osfd"]
+            valid_methods = ["fgsm", "pgd", "universal_noise", "noise_osfd", "distortion_aware"]
             if attack_method not in valid_methods:
                 raise ValidationError(
                     f"Invalid attack method: {attack_method}. "
@@ -360,6 +386,12 @@ class NoiseAttackService:
                 # Use target_class_id if specified, otherwise default to 0 (person in COCO)
                 universal_target_class_id = target_class_id if target_class_id is not None else 0
 
+                # Set defaults for multi-target parameters
+                if top_k_detections is None:
+                    top_k_detections = -1  # Default: all detections (multi-target)
+                if confidence_threshold is None:
+                    confidence_threshold = 0.0  # Default: no confidence filtering
+
                 # Get scheduler configuration
                 scheduler_type = attack_config.get("scheduler_type", "constant")
                 scheduler_params = attack_config.get("scheduler_params", {})
@@ -393,6 +425,17 @@ class NoiseAttackService:
                     "Attack Loss가 자동으로 활성화됩니다 (DetectionAttackLoss)"
                 )
 
+                # Log multi-target configuration
+                if top_k_detections == -1:
+                    multi_target_mode = "모든 detection (다중 타겟)"
+                elif top_k_detections == 1:
+                    multi_target_mode = "단일 타겟 (AEGIS 스타일)"
+                else:
+                    multi_target_mode = f"상위 {top_k_detections}개 detection"
+                await sse_logger.info(
+                    f"Pseudo-GT 모드: {multi_target_mode}, confidence threshold: {confidence_threshold}"
+                )
+
                 attack = UniversalNoiseAttackPyTorch(
                     estimator=estimator,
                     eps=eps_normalized / 255.0,
@@ -401,6 +444,8 @@ class NoiseAttackService:
                     batch_size=optimal_batch_size,  # Dynamic batch size based on GPU memory
                     apply_mask=True,  # Apply perturbation to detected regions
                     target_class_id=universal_target_class_id,
+                    top_k_detections=top_k_detections,  # Multi-target support
+                    confidence_threshold=confidence_threshold,  # Confidence filtering
                     verbose=True,
                     scheduler_type=scheduler_type,  # Auto-configured scheduler
                     scheduler_params=scheduler_params,
@@ -409,7 +454,9 @@ class NoiseAttackService:
                 await sse_logger.info(
                     f"Universal Noise Attack 생성 (PyTorch): epsilon={epsilon}, "
                     f"step_size={alpha}, iterations={iterations}, "
-                    f"target_class_id={universal_target_class_id}, pseudo-GT enabled, Attack Loss enabled"
+                    f"target_class_id={universal_target_class_id}, "
+                    f"multi_target_mode={multi_target_mode}, "
+                    f"pseudo-GT enabled, Attack Loss enabled"
                 )
 
             elif attack_method == "noise_osfd":
@@ -466,6 +513,88 @@ class NoiseAttackService:
                     f"layers={feature_layers}, RRB augmentation enabled"
                 )
 
+            elif attack_method == "distortion_aware":
+                # Distortion-Aware Attack - Image-specific with NCC-based distortion control
+                # Matches attack_detector paper implementation
+
+                # Get NCC threshold from preset (varies by intensity level)
+                ncc_threshold_map = {
+                    "weak": 0.7,    # High similarity (less distortion)
+                    "medium": 0.6,  # Paper default
+                    "strong": 0.5,  # Lower similarity (more distortion)
+                }
+                ncc_threshold = ncc_threshold_map.get(intensity_level, 0.6)
+
+                # Get configuration from attack_config
+                attack_mode = attack_config.get("attack_mode", "image_specific")
+                use_model_loss = attack_config.get("use_model_loss", True)
+                apply_mask = attack_config.get("apply_mask", True)
+
+                await sse_logger.info(
+                    f"Distortion-Aware Attack 설정: NCC threshold={ncc_threshold}, "
+                    f"mode={attack_mode}, model_loss={use_model_loss}, "
+                    f"masking={apply_mask}"
+                )
+
+                # Use target_class_id if specified, otherwise default to 0 (person in COCO)
+                distortion_target_class_id = target_class_id if target_class_id is not None else 0
+
+                # Store the main event loop reference
+                import asyncio
+                main_loop = asyncio.get_event_loop()
+
+                # Define progress callback for SSE updates
+                def distortion_progress_callback(current_iter: int, total_iter: int, loss_value: float, current_lr: float):
+                    """Callback to send training progress via SSE (called from training thread)"""
+                    try:
+                        # Schedule coroutine in main event loop from worker thread
+                        asyncio.run_coroutine_threadsafe(
+                            sse_logger.progress(
+                                f"Distortion-Aware 공격 중... ({current_iter}/{total_iter}) NCC: {ncc_threshold:.2f}",
+                                processed=current_iter,
+                                total=total_iter,
+                                successful=current_iter,
+                                failed=0
+                            ),
+                            main_loop
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send distortion progress via SSE: {e}")
+
+                # CRITICAL FIX: alpha is ALREADY normalized (0.392 = 100/255)
+                # DO NOT divide by 255 again!
+                await sse_logger.info(
+                    f"Step size 확인: alpha={alpha:.6f} (이미 정규화됨, 다시 나누지 않음!)"
+                )
+
+                attack = DistortionAwareAttackPyTorch(
+                    estimator=estimator,
+                    eps=eps_normalized / 255.0,  # 255.0 / 255.0 = 1.0 (no epsilon constraint)
+                    eps_step=alpha,  # ✅ FIXED: alpha is already normalized (0.392)
+                    max_iter=iterations,  # 1000-5000 iterations based on intensity
+                    ncc_threshold=ncc_threshold,  # NCC-based distortion control
+                    target_class_id=distortion_target_class_id,
+                    verbose=True,
+                )
+                await sse_logger.info(
+                    f"Distortion-Aware Attack 생성 완료"
+                )
+                await sse_logger.info(
+                    f"  - Epsilon: {epsilon} → 정규화: {eps_normalized/255.0:.6f}"
+                )
+                await sse_logger.info(
+                    f"  - Step size: {alpha:.6f} (원본: 100/255 = 0.392)"
+                )
+                await sse_logger.info(
+                    f"  - Iterations: {iterations}"
+                )
+                await sse_logger.info(
+                    f"  - NCC threshold: {ncc_threshold} ({intensity_level} 강도)"
+                )
+                await sse_logger.info(
+                    f"  - 예상 최대 perturbation: ~{alpha * iterations:.1f} (clipping 전)"
+                )
+
             # Step 4: Apply attack to all images
             await sse_logger.status("이미지에 공격 적용 중...")
             attacked_images = []
@@ -478,6 +607,7 @@ class NoiseAttackService:
             loop = asyncio.get_event_loop()
 
             # For Universal Noise and OSFD, train perturbation once on all images
+            # For Distortion-Aware, attack each image individually (no universal perturbation)
             universal_perturbation = None
             if attack_method in ["universal_noise", "noise_osfd"]:
                 await sse_logger.status(f"{attack_method.upper()}: 범용 perturbation 학습 중...")
@@ -500,15 +630,15 @@ class NoiseAttackService:
                             f"다른 클래스를 선택하거나 타겟 클래스 없이 전체 공격을 수행하세요."
                         )
 
-                    # Use up to 50 images with target class
-                    training_images = images_with_target[:min(len(images_with_target), 50)]
+                    # Use all images with target class for training
+                    training_images = images_with_target
                     await sse_logger.info(
-                        f"타겟 클래스 포함 이미지: {len(images_with_target)}개 중 {len(training_images)}개 선택"
+                        f"타겟 클래스 포함 이미지: {len(images_with_target)}개 전체 사용"
                     )
                 else:
-                    # No target class specified, use first 50 images
-                    training_images = images[:min(len(images), 50)]
-                    await sse_logger.info(f"전체 이미지 중 {len(training_images)}개로 학습")
+                    # No target class specified, use all images
+                    training_images = images
+                    await sse_logger.info(f"전체 이미지 {len(training_images)}개로 학습")
 
                 # Prepare all images for batch training
                 all_images_batch = []
@@ -551,13 +681,17 @@ class NoiseAttackService:
 
                 # Train universal perturbation
                 def train_universal():
-                    result = attack.generate(x=x_batch, y=y_batch)
+                    result = attack.generate(x=x_batch, y=y_batch, return_perturbation=True)
                     if isinstance(result, tuple):
                         return result[1]  # Return perturbation
                     return None
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     universal_perturbation = await loop.run_in_executor(executor, train_universal)
+
+                # Validate perturbation was generated
+                if universal_perturbation is None:
+                    raise ValidationError("Failed to generate universal perturbation")
 
                 await sse_logger.info(f"범용 perturbation 학습 완료")
 
@@ -684,6 +818,7 @@ class NoiseAttackService:
                 # Prepare all images for batch application (keep in HWC format)
                 x_batch_list = []
                 resize_info_list = []
+                y_batch_list = [] if target_class_id is not None and annotations else None
                 for img_data in images:
                     img = img_data["image"]
                     original_h, original_w = img.shape[:2]
@@ -705,29 +840,44 @@ class NoiseAttackService:
                         "original_width": original_w
                     })
 
-                    # Keep in HWC format (H, W, C)
-                    x_batch_list.append(img.astype(np.float32))
+                    # CRITICAL FIX: Convert to CHW format (C, H, W) to match estimator's channels_first=True
+                    # Estimator expects NCHW input when channels_first=True
+                    x = img.transpose(2, 0, 1).astype(np.float32)  # (H, W, C) -> (C, H, W)
+                    x_batch_list.append(x)
 
-                x_batch = np.array(x_batch_list)  # (N, H, W, C)
+                    if y_batch_list is not None:
+                        y_target = self._convert_annotations_to_art_format(
+                            annotations,
+                            img_data["id"],
+                            target_class_id,
+                            original_size=(original_h, original_w) if resized else None,
+                            resized_size=(model_height, model_width) if resized else None,
+                        )
+                        y_batch_list.append(
+                            y_target if y_target else {"boxes": np.array([]), "labels": np.array([]), "scores": np.array([])}
+                        )
 
-                # CRITICAL FIX: Use attack.apply_perturbation() with masking
-                # This ensures GT boxes are used for masking (like AEGIS)
+                x_batch = np.array(x_batch_list)  # (N, C, H, W) - channels first
+
+                # Use attack.apply_perturbation() with masking; prefer GT when available.
                 def apply_with_mask():
                     # Set the pre-trained perturbation
                     attack.set_perturbation(universal_perturbation)
-                    # Apply perturbation with masking (generates pseudo-GT automatically)
-                    return attack.apply_perturbation(x=x_batch, y=None, apply_mask=True)
+                    # Apply perturbation with masking (GT if provided; otherwise pseudo-GT)
+                    return attack.apply_perturbation(x=x_batch, y=y_batch_list, apply_mask=True)
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     x_adv_batch = await loop.run_in_executor(executor, apply_with_mask)
 
                 await sse_logger.info(f"Perturbation applied to batch of {len(x_adv_batch)} images with masking.")
 
-                # Process the results (x_adv_batch is already in HWC format)
+                # Process the results (x_adv_batch is in CHW format from channels_first=True estimator)
                 for idx, (x_adv, img_data, resize_info_item) in enumerate(zip(x_adv_batch, images, resize_info_list)):
                     try:
-                        # x_adv is already in HWC format (H, W, C)
-                        adv_img = np.clip(x_adv, 0, 255).astype(np.uint8)
+                        # CRITICAL FIX: Convert from CHW (C, H, W) to HWC (H, W, C) for PIL operations
+                        # estimator.channels_first=True means output is also in CHW format
+                        x_adv_hwc = x_adv.transpose(1, 2, 0)  # (C, H, W) -> (H, W, C)
+                        adv_img = np.clip(x_adv_hwc, 0, 255).astype(np.uint8)
 
                         # CRITICAL FIX: Resize back to original size if image was resized
                         if resize_info_item["resized"]:
@@ -755,6 +905,91 @@ class NoiseAttackService:
                         logger.error(f"Failed to process perturbed image {idx}: {e}", exc_info=True)
                         failed_count += 1
                         await sse_logger.warning(f"이미지 {idx} 처리 실패: {str(e)}")
+
+            # For Distortion-Aware, attack each image individually (image-specific attack)
+            elif attack_method == "distortion_aware":
+                await sse_logger.status(f"Distortion-Aware: 이미지별 독립 공격 중...")
+
+                for idx, img_data in enumerate(images):
+                    try:
+                        await sse_logger.progress(
+                            f"이미지 {idx + 1}/{len(images)} 공격 중...",
+                            processed=idx,
+                            total=len(images),
+                            successful=len(attacked_images),
+                            failed=failed_count
+                        )
+
+                        img = img_data["image"]
+                        original_h, original_w = img.shape[:2]
+
+                        # Resize to model input size if needed
+                        model_height, model_width = input_size[0], input_size[1]
+                        resized = False
+                        if img.shape[0] != model_height or img.shape[1] != model_width:
+                            from PIL import Image
+                            img_pil = Image.fromarray(img.astype(np.uint8))
+                            img_pil = img_pil.resize((model_width, model_height), Image.BICUBIC)
+                            img = np.array(img_pil).astype(np.float32)
+                            resized = True
+
+                        # Convert to CHW format and add batch dimension
+                        x = img.transpose(2, 0, 1).astype(np.float32)  # (H, W, C) -> (C, H, W)
+                        x_batch = np.expand_dims(x, axis=0)  # (1, C, H, W)
+
+                        # Prepare y if target_class is specified
+                        y_batch = None
+                        if target_class_id is not None and annotations:
+                            y_target = self._convert_annotations_to_art_format(
+                                annotations,
+                                img_data["id"],
+                                target_class_id,
+                                original_size=(original_h, original_w) if resized else None,
+                                resized_size=(model_height, model_width) if resized else None,
+                            )
+                            y_batch = [y_target] if y_target else None
+
+                        # Attack this single image (y=None means pseudo-GT will be generated)
+                        def attack_single():
+                            return attack.generate(x=x_batch, y=y_batch)
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            x_adv_batch = await loop.run_in_executor(executor, attack_single)
+
+                        # Extract result (remove batch dimension)
+                        x_adv = x_adv_batch[0]  # (C, H, W)
+
+                        # Convert from CHW to HWC
+                        x_adv_hwc = x_adv.transpose(1, 2, 0)  # (C, H, W) -> (H, W, C)
+                        adv_img = np.clip(x_adv_hwc, 0, 255).astype(np.uint8)
+
+                        # Resize back to original size if needed
+                        if resized:
+                            from PIL import Image
+                            adv_img_pil = Image.fromarray(adv_img.astype(np.uint8))
+                            adv_img_pil = adv_img_pil.resize((original_w, original_h), Image.BICUBIC)
+                            adv_img = np.array(adv_img_pil).astype(np.uint8)
+
+                        attacked_images.append({
+                            "image": adv_img,
+                            "original_file_name": img_data["file_name"],
+                            "original_id": img_data["id"],
+                        })
+
+                        await sse_logger.progress(
+                            f"이미지 {idx + 1}/{len(images)} 완료",
+                            processed=idx + 1,
+                            total=len(images),
+                            successful=len(attacked_images),
+                            failed=failed_count
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to attack image {idx} with Distortion-Aware: {e}", exc_info=True)
+                        failed_count += 1
+                        await sse_logger.warning(f"이미지 {idx} 공격 실패: {str(e)}")
+
+                await sse_logger.info(f"Distortion-Aware 공격 완료: 성공 {len(attacked_images)}, 실패 {failed_count}")
 
             if not attacked_images:
                 raise ValidationError("All images failed to be attacked")
@@ -827,6 +1062,8 @@ class NoiseAttackService:
                         "alpha": alpha,
                         "iterations": iterations,
                         "target_class_id": target_class_id,  # Store class ID for reference
+                        "top_k_detections": top_k_detections,  # Multi-target config
+                        "confidence_threshold": confidence_threshold,  # Pseudo-GT filtering
                         "processed_images": len(attacked_images),
                         "failed_images": failed_count,
                         "storage_path": str(output_dataset_path),

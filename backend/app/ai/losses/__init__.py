@@ -148,10 +148,10 @@ class AttackLossRegistry:
     default_config={
         'iou_threshold': 0.1,
         'class_conf_threshold': 0.05,
-        'top_k_boxes': 5,
+        'top_k_boxes': -1,
         'top_n_classes': 3,
         'lambda_targeted': 1.0,
-        'lambda_agnostic': 1.5
+        'lambda_agnostic': 2.0
     }
 )
 class UniversalNoiseAttackLoss(DetectionAttackLoss):

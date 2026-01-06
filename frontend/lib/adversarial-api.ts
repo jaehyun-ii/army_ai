@@ -85,7 +85,7 @@ export interface AdversarialDataConfig {
   training_id?: string | number
   attack_type: 'patch' | 'noise'
   patch_scale?: number
-  noise_method?: "pgd" | "fgsm" // Added: noise attack method
+  noise_method?: "pgd" | "fgsm" | "universal_noise" | "noise_osfd" | "distortion_aware"
   noise_epsilon?: number // Renamed from noise_intensity
   noise_alpha?: number // Added: PGD alpha parameter
   noise_iterations?: number // Added: PGD iterations parameter

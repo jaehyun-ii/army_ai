@@ -99,7 +99,7 @@ export interface AdversarialAttack {
   createdAt: Date
 }
 
-export type AttackType = 'fgsm' | 'pgd' | 'carlini-wagner' | 'patch' | 'universal' | 'universal_noise' | 'noise_osfd'
+export type AttackType = 'fgsm' | 'pgd' | 'carlini-wagner' | 'patch' | 'universal' | 'universal_noise' | 'noise_osfd' | 'distortion_aware'
 export type AttackStatus = 'configuring' | 'generating' | 'testing' | 'completed'
 
 export interface AttackParameters {

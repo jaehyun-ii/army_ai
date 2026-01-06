@@ -16,6 +16,7 @@ from app.ai.attacks.evasion.naturalistic_patch_pytorch import NaturalisticPatchP
 # Universal noise attacks - PyTorch implementations
 from app.ai.attacks.evasion.universal_noise_pytorch import UniversalNoiseAttackPyTorch
 from app.ai.attacks.evasion.noise_osfd_pytorch import NoiseOSFDPyTorch
+from app.ai.attacks.evasion.distortion_aware_pytorch import DistortionAwareAttackPyTorch
 
 # Backward compatibility aliases
 UniversalNoiseAttack = UniversalNoiseAttackPyTorch
@@ -30,6 +31,7 @@ __all__ = [
     "NaturalisticPatchPyTorch",
     "UniversalNoiseAttackPyTorch",
     "NoiseOSFDPyTorch",
+    "DistortionAwareAttackPyTorch",
     "UniversalNoiseAttack",
     "NoiseOSFD",
 ]
