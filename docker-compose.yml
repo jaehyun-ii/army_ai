@@ -194,7 +194,7 @@ services:
   # =====================
   carla_simulator:
     image: army_ai_sim:0.0.3
-    container_name: army_ai_sim
+    container_name: army_ai_sim_dev
     restart: unless-stopped
     tty: true
     stdin_open: true
@@ -232,7 +232,7 @@ services:
   # =====================
   carla_client_backend:
     image: army_carla_client_backend:0.0.2
-    container_name: army_ai_carla_backend
+    container_name: army_ai_carla_backend_dev
     restart: unless-stopped
     tty: true
     stdin_open: true
@@ -262,7 +262,7 @@ services:
               capabilities: [gpu]
     depends_on:
       - carla_simulator
-    command: /bin/bash
+    command: python /workspace/main.py --port 8888 --host 0.0.0.0 --carla_host carla_simulator --carla_port 2000
 
 # =====================
 # Networks
