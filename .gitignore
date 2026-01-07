@@ -46,9 +46,7 @@ htmlcov/
 logs/
 log/
 
-# Storage (file uploads)
-storage/*
-!storage/.gitkeep
+# Storage (file uploads) - see OverlayFS layers section below
 database/storage/
 backend/storage/
 
@@ -107,7 +105,9 @@ carla_back/*
 aegis-framework-main/*
 attack_detector/*
 Natualistic-Adversarial-Patch/*
-storage_base/*
-storage_data/*
-storage/*
-stroage_work/*
+# OverlayFS Storage Layers
+
+storage_base/*        
+storage_data/*    
+storage_work/*       
+storage/*           

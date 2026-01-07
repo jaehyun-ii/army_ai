@@ -51,6 +51,25 @@ mount_overlay() {
     mkdir -p "$WORK_DIR"
     mkdir -p "$MERGED_DIR"
 
+    # Fix permissions: Ensure current user can access files created by containers
+    # Using setgid (g+s) + group write (g+w) to maintain group ownership
+    echo "Setting permissions for multi-user access..."
+
+    # Get current user and group
+    CURRENT_USER="${SUDO_USER:-$(whoami)}"
+    CURRENT_GROUP=$(id -gn "$CURRENT_USER")
+
+    # Set ownership to current user:group
+    sudo chown -R "$CURRENT_USER:$CURRENT_GROUP" "$UPPER_DIR" "$WORK_DIR" "$MERGED_DIR"
+
+    # Set permissions:
+    # - 2775 (rwxrwsr-x): setgid bit ensures new files inherit group
+    # - This allows both host user and container to write
+    sudo chmod 2775 "$UPPER_DIR" "$WORK_DIR"
+
+    echo "  Owner: $CURRENT_USER:$CURRENT_GROUP"
+    echo "  Permissions: 2775 (setgid + group write)"
+
     # Verify directories exist
     if [ ! -d "$LOWER_DIR" ]; then
         echo -e "${RED}✗ Error: Lower directory not found: $LOWER_DIR${NC}"
