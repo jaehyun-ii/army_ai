@@ -178,8 +178,8 @@ services:
       - frontend_logs_dev:/app/logs
       # Cache for Next.js
       - frontend_next_cache:/app/.next
-      # Shared storage for images (same as backend)
-      - ./storage:/storage:ro
+      # NOTE: Storage access is handled via backend API proxy (/api/storage -> /api/v1/storage)
+      # Direct storage mount is NOT needed
     depends_on:
       postgres:
         condition: service_healthy
