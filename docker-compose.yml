@@ -96,6 +96,8 @@ services:
       - backend_logs_dev:/app/logs
       # Hot reload: mount source code (uncomment if backend supports hot reload)
       - ./backend:/app:rw
+      # Entrypoint script (for hot reload without rebuild)
+      - ./backend/entrypoint.sh:/entrypoint.sh:ro
       # Host system monitoring - required for accurate CPU/memory stats
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -106,6 +108,7 @@ services:
       - /dev/video2:/dev/video2
       - /dev/video3:/dev/video3
     privileged: true  # Required for camera access
+    entrypoint: ["/entrypoint.sh"]
     depends_on:
       postgres:
         condition: service_healthy
