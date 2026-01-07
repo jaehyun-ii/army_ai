@@ -180,28 +180,28 @@ class Dataset3DService:
         try:
             logger.debug(f"Converting CARLA path: {image_path}")
 
-            # /static/exports/{folder_name}/... -> /storage/3d/{folder_name}/...
+            # /static/exports/{folder_name}/... -> /storage/3d/exports/{folder_name}/...
             if image_path.startswith("/static/exports/"):
                 relative_path = image_path.replace("/static/exports/", "")
-                storage_path = f"/storage/3d/{relative_path}"
+                storage_path = f"/storage/3d/exports/{relative_path}"
                 logger.debug(f"Converted (static/exports): {image_path} -> {storage_path}")
                 return storage_path
 
-            # /exports/{folder_name}/... -> /storage/3d/{folder_name}/...
+            # /exports/{folder_name}/... -> /storage/3d/exports/{folder_name}/...
             elif image_path.startswith("/exports/"):
                 relative_path = image_path.replace("/exports/", "")
-                storage_path = f"/storage/3d/{relative_path}"
+                storage_path = f"/storage/3d/exports/{relative_path}"
                 logger.debug(f"Converted (exports): {image_path} -> {storage_path}")
                 return storage_path
 
-            # /workspace/exports/{folder_name}/... -> /storage/3d/{folder_name}/...
+            # /workspace/exports/{folder_name}/... -> /storage/3d/exports/{folder_name}/...
             elif image_path.startswith("/workspace/exports/"):
                 relative_path = image_path.replace("/workspace/exports/", "")
-                storage_path = f"/storage/3d/{relative_path}"
+                storage_path = f"/storage/3d/exports/{relative_path}"
                 logger.debug(f"Converted (workspace): {image_path} -> {storage_path}")
                 return storage_path
 
-            # /storage/3d/{folder_name}/... 형식은 이미 변환된 경로
+            # /storage/3d/... 형식은 이미 변환된 경로
             elif image_path.startswith("/storage/3d/"):
                 logger.debug(f"Already in storage format: {image_path}")
                 return image_path
