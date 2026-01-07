@@ -15,6 +15,10 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
 
         # Ensure CARLA vehicles directory exists
         mkdir -p "$CARLA_VEHICLES_PATH"
+
+        # Create storage_rw with proper permissions
+        mkdir -p /storage_rw
+        chmod 777 /storage_rw  # Allow container user to create subdirs
         mkdir -p /storage_rw/upper /storage_rw/work
 
         # OverlayFS 마운트

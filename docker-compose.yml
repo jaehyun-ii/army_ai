@@ -112,6 +112,7 @@ services:
       - /dev/video2:/dev/video2
       - /dev/video3:/dev/video3
     entrypoint: ["/entrypoint.sh"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     depends_on:
       postgres:
         condition: service_healthy
