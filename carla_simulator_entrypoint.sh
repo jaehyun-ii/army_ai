@@ -17,8 +17,10 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
         mkdir -p "$CARLA_VEHICLES_PATH"
 
         # Create storage_rw with proper permissions
+        # Volume may be owned by root, change ownership to current user
         mkdir -p /storage_rw
-        chmod 777 /storage_rw  # Allow container user to create subdirs
+        CURRENT_USER=$(whoami)
+        chown -R $CURRENT_USER:$CURRENT_USER /storage_rw 2>/dev/null || true
         mkdir -p /storage_rw/upper /storage_rw/work
 
         # OverlayFS 마운트
