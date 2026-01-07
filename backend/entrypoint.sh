@@ -21,10 +21,10 @@ if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
 
         # Use rsync for efficient synchronization
         # -a: archive mode (preserves permissions, timestamps, etc.)
-        # -v: verbose
         # --ignore-existing: only copy files that don't exist in destination
+        # --info=progress2: show overall progress instead of file-by-file
         echo "Syncing files from storage_init..."
-        rsync -av --ignore-existing /storage_init/ /storage/
+        rsync -a --ignore-existing --info=progress2 /storage_init/ /storage/
 
         # Create flag file
         touch "$INIT_FLAG"

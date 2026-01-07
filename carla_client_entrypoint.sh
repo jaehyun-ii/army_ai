@@ -19,12 +19,12 @@ if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
 
         # Sync from storage_init using rsync (only new files)
         echo "Syncing from storage_init..."
-        rsync -av --ignore-existing /storage_init/ /workspace/
+        rsync -a --ignore-existing --info=progress2 /storage_init/ /workspace/
 
         # Now sync from /storage (read-write storage) - these override storage_init
         if [ -d "/storage" ]; then
             echo "Loading from storage (overwrite mode)..."
-            rsync -av /storage/ /workspace/
+            rsync -a --info=progress2 /storage/ /workspace/
         fi
 
         # Create flag file

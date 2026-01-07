@@ -21,12 +21,12 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
 
         # Sync vehicles from storage_init using rsync (only new files)
         echo "Syncing vehicles from storage_init..."
-        rsync -av --ignore-existing /storage_init/Vehicles/ "$CARLA_VEHICLES_PATH/"
+        rsync -a --ignore-existing --info=progress2 /storage_init/Vehicles/ "$CARLA_VEHICLES_PATH/"
 
         # Sync custom vehicles from storage (these override storage_init)
         if [ -d "/storage/Vehicles" ] && [ "$(ls -A /storage/Vehicles 2>/dev/null)" ]; then
             echo "Loading custom vehicles from storage (overwrite)..."
-            rsync -av /storage/Vehicles/ "$CARLA_VEHICLES_PATH/"
+            rsync -a --info=progress2 /storage/Vehicles/ "$CARLA_VEHICLES_PATH/"
         fi
 
         # Create flag file
