@@ -16,32 +16,23 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
         # Ensure CARLA vehicles directory exists
         mkdir -p "$CARLA_VEHICLES_PATH"
 
-        # Create storage_rw with proper permissions
-        # Running as root in docker-compose to fix volume permissions
-        mkdir -p /storage_rw/upper /storage_rw/work
+        # 호스트 ./storage/simulator에 직접 저장하도록 설정
+        mkdir -p /storage_rw
         chmod -R 777 /storage_rw
+        # workdir는 tmpfs에 생성
+        mkdir -p /tmp/overlay_work
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init/Vehicles)
-        # upperdir: 읽기/쓰기 (새 차량, 수정사항)
-        # workdir: overlay 작업용
-
-        # storage/Vehicles가 있으면 2계층 overlay
-        if [ -d "/storage/Vehicles" ] && [ "$(ls -A /storage/Vehicles 2>/dev/null)" ]; then
-            echo "Using 2-layer overlay: storage_init (base) + storage (custom)"
-            mount -t overlay overlay \
-                -o lowerdir=/storage/Vehicles:/storage_init/Vehicles,upperdir=/storage_rw/upper,workdir=/storage_rw/work \
-                "$CARLA_VEHICLES_PATH"
-        else
-            echo "Using single overlay: storage_init (base)"
-            mount -t overlay overlay \
-                -o lowerdir=/storage_init/Vehicles,upperdir=/storage_rw/upper,workdir=/storage_rw/work \
-                "$CARLA_VEHICLES_PATH"
-        fi
+        # upperdir: 읽기/쓰기 (호스트 ./storage/simulator에 직접 저장)
+        # workdir: overlay 작업용 (tmpfs)
+        mount -t overlay overlay \
+            -o lowerdir=/storage_init/Vehicles,upperdir=/storage_rw,workdir=/tmp/overlay_work \
+            "$CARLA_VEHICLES_PATH"
 
         echo "✅ OverlayFS mounted: $CARLA_VEHICLES_PATH"
-        echo "   Lower: /storage_init/Vehicles (+ /storage/Vehicles if exists)"
-        echo "   Upper: /storage_rw/upper"
+        echo "   Lower (RO): /storage_init/Vehicles"
+        echo "   Upper (RW): /storage_rw → 호스트 ./storage/simulator"
     else
         echo "OverlayFS already mounted at $CARLA_VEHICLES_PATH"
     fi

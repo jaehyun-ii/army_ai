@@ -93,7 +93,7 @@ services:
     volumes:
       # OverlayFS layers
       - ./storage_init:/storage_init:ro   # Lower layer (읽기 전용 초기 데이터)
-      - backend_storage_rw:/storage_rw:rw # Upper/Work layer (OverlayFS용)
+      - ./storage:/storage_rw:rw          # Upper/Work layer (호스트 ./storage에 저장)
       # /storage는 entrypoint에서 OverlayFS로 마운트됨
 
       - ./backups:/backups:rw
@@ -220,8 +220,7 @@ services:
     volumes:
       # OverlayFS layers for Vehicles
       - ./storage_init/simulator:/storage_init:ro  # Lower layer (읽기 전용 초기 차량)
-      - ./storage/simulator:/storage:ro            # Middle layer (커스텀 차량, 읽기 전용)
-      - carla_sim_storage_rw:/storage_rw:rw        # Upper/Work layer (OverlayFS용)
+      - ./storage/simulator:/storage_rw:rw         # Upper/Work layer (호스트 ./storage/simulator에 저장)
       # CARLA_VEHICLES_PATH는 entrypoint에서 OverlayFS로 마운트됨
 
       - ./carla_simulator_entrypoint.sh:/entrypoint.sh:ro
@@ -268,8 +267,7 @@ services:
     volumes:
       # OverlayFS layers
       - ./storage_init/3d:/storage_init:ro   # Lower layer (읽기 전용 초기 데이터)
-      - ./storage/3d:/storage:ro             # Middle layer (기존 데이터, 읽기 전용)
-      - carla_client_storage_rw:/storage_rw:rw # Upper/Work layer (OverlayFS용)
+      - ./storage/3d:/storage_rw:rw          # Upper/Work layer (호스트 ./storage/3d에 저장)
       # /storage_merged는 entrypoint에서 OverlayFS로 마운트되고
       # /workspace는 /storage_merged로 symlink됨
 
@@ -307,19 +305,6 @@ volumes:
   backend_logs_dev:
     driver: local
     name: army_ai_backend_logs_dev
-
-  # OverlayFS upper/work directories
-  backend_storage_rw:
-    driver: local
-    name: army_ai_backend_storage_rw
-
-  carla_sim_storage_rw:
-    driver: local
-    name: army_ai_carla_sim_storage_rw
-
-  carla_client_storage_rw:
-    driver: local
-    name: army_ai_carla_client_storage_rw
 
   frontend_node_modules:
     driver: local

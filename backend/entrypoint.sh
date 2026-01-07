@@ -10,20 +10,22 @@ if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
     if ! mountpoint -q /storage 2>/dev/null; then
         echo "Setting up OverlayFS (no copy, instant)..."
 
-        # 디렉토리 생성
-        mkdir -p /storage_rw/upper /storage_rw/work /storage
+        # 호스트 ./storage에 직접 저장하도록 설정
+        mkdir -p /storage_rw /storage
+        # workdir는 tmpfs에 생성 (upper와 분리)
+        mkdir -p /tmp/overlay_work
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init)
-        # upperdir: 읽기/쓰기 (새 파일, 수정사항)
-        # workdir: overlay 작업용
+        # upperdir: 읽기/쓰기 (호스트 ./storage에 직접 저장)
+        # workdir: overlay 작업용 (tmpfs)
         mount -t overlay overlay \
-            -o lowerdir=/storage_init,upperdir=/storage_rw/upper,workdir=/storage_rw/work \
+            -o lowerdir=/storage_init,upperdir=/storage_rw,workdir=/tmp/overlay_work \
             /storage
 
         echo "✅ OverlayFS mounted: /storage"
         echo "   Lower (RO): /storage_init"
-        echo "   Upper (RW): /storage_rw/upper"
+        echo "   Upper (RW): /storage_rw → 호스트 ./storage"
     else
         echo "OverlayFS already mounted at /storage"
     fi
