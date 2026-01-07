@@ -19,15 +19,16 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
         # 호스트 ./storage/simulator에 직접 저장하도록 설정
         mkdir -p /storage_rw
         chmod -R 777 /storage_rw
-        # workdir는 tmpfs에 생성
-        mkdir -p /tmp/overlay_work
+        # workdir는 upperdir와 같은 파일시스템에 있어야 함
+        mkdir -p /storage_rw/.overlay_work
+        chmod -R 777 /storage_rw/.overlay_work
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init/Vehicles)
         # upperdir: 읽기/쓰기 (호스트 ./storage/simulator에 직접 저장)
-        # workdir: overlay 작업용 (tmpfs)
+        # workdir: overlay 작업용 (upperdir와 같은 파일시스템)
         mount -t overlay overlay \
-            -o lowerdir=/storage_init/Vehicles,upperdir=/storage_rw,workdir=/tmp/overlay_work \
+            -o lowerdir=/storage_init/Vehicles,upperdir=/storage_rw,workdir=/storage_rw/.overlay_work \
             "$CARLA_VEHICLES_PATH"
 
         echo "✅ OverlayFS mounted: $CARLA_VEHICLES_PATH"

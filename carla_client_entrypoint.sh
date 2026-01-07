@@ -13,15 +13,15 @@ if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
 
         # 호스트 ./storage/3d에 직접 저장하도록 설정
         mkdir -p /storage_rw /storage_merged
-        # workdir는 tmpfs에 생성
-        mkdir -p /tmp/overlay_work
+        # workdir는 upperdir와 같은 파일시스템에 있어야 함
+        mkdir -p /storage_rw/.overlay_work
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init)
         # upperdir: 읽기/쓰기 (호스트 ./storage/3d에 직접 저장)
-        # workdir: overlay 작업용 (tmpfs)
+        # workdir: overlay 작업용 (upperdir와 같은 파일시스템)
         mount -t overlay overlay \
-            -o lowerdir=/storage_init,upperdir=/storage_rw,workdir=/tmp/overlay_work \
+            -o lowerdir=/storage_init,upperdir=/storage_rw,workdir=/storage_rw/.overlay_work \
             /storage_merged
 
         echo "✅ OverlayFS mounted: /storage_merged"
