@@ -17,20 +17,21 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
         mkdir -p "$CARLA_VEHICLES_PATH"
 
         # 호스트 ./storage/simulator에 직접 저장하도록 설정
-        mkdir -p /storage_upper /storage_work
-        chmod -R 777 /storage_upper /storage_work
+        # workdir는 upperdir와 같은 마운트 내에 있어야 함
+        mkdir -p /storage_overlay/.overlayfs_work
+        chmod -R 777 /storage_overlay /storage_overlay/.overlayfs_work
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init/Vehicles)
         # upperdir: 읽기/쓰기 (호스트 ./storage/simulator에 저장)
-        # workdir: overlay 작업용 (upperdir와 분리된 디렉토리)
+        # workdir: overlay 작업용 (upperdir와 같은 마운트 내)
         mount -t overlay overlay \
-            -o lowerdir=/storage_init/Vehicles,upperdir=/storage_upper,workdir=/storage_work \
+            -o lowerdir=/storage_init/Vehicles,upperdir=/storage_overlay,workdir=/storage_overlay/.overlayfs_work \
             "$CARLA_VEHICLES_PATH"
 
         echo "✅ OverlayFS mounted: $CARLA_VEHICLES_PATH"
         echo "   Lower (RO): /storage_init/Vehicles"
-        echo "   Upper (RW): /storage_upper → 호스트 ./storage/simulator"
+        echo "   Upper (RW): /storage_overlay → 호스트 ./storage/simulator"
     else
         echo "OverlayFS already mounted at $CARLA_VEHICLES_PATH"
     fi
