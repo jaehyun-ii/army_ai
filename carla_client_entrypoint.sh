@@ -6,56 +6,63 @@ echo "CARLA Client Backend - Starting..."
 echo "==================================="
 
 # Initialize workspace from storage_init if needed
+INIT_FLAG="/workspace/.initialized"
+
 if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
-    echo "Initializing workspace from storage_init..."
+    if [ -f "$INIT_FLAG" ]; then
+        echo "Workspace already initialized (found $INIT_FLAG), skipping..."
+    else
+        echo "First-time workspace initialization using hardlinks (instant)..."
 
-    # Install rsync if not available
-    if ! command -v rsync &> /dev/null; then
-        echo "Installing rsync..."
-        apt-get update -qq && apt-get install -y -qq rsync > /dev/null 2>&1
-    fi
+        # Ensure workspace directories exist
+        mkdir -p /workspace/exports /workspace/imports /workspace/logs /workspace/storage
 
-    # Ensure workspace directories exist
-    mkdir -p /workspace/exports /workspace/imports /workspace/logs /workspace/storage
+        echo "Creating hardlinks from storage_init..."
+        file_count=0
 
-    # Copy storage_init to workspace (only if files don't exist)
-    # exports
-    if [ -d "/storage_init/exports" ]; then
-        rsync -av --ignore-existing /storage_init/exports/ /workspace/exports/
-    fi
+        # Hardlink files from storage_init subdirectories
+        for subdir in exports imports logs storage; do
+            if [ -d "/storage_init/$subdir" ] && [ "$(ls -A /storage_init/$subdir 2>/dev/null)" ]; then
+                find "/storage_init/$subdir" -type f 2>/dev/null | while read src_file; do
+                    rel_path="${src_file#/storage_init/$subdir/}"
+                    dest_file="/workspace/$subdir/$rel_path"
+                    dest_dir="$(dirname "$dest_file")"
 
-    # imports
-    if [ -d "/storage_init/imports" ]; then
-        rsync -av --ignore-existing /storage_init/imports/ /workspace/imports/
-    fi
+                    mkdir -p "$dest_dir"
 
-    # logs
-    if [ -d "/storage_init/logs" ]; then
-        rsync -av --ignore-existing /storage_init/logs/ /workspace/logs/
-    fi
+                    if [ ! -e "$dest_file" ]; then
+                        if ln "$src_file" "$dest_file" 2>/dev/null; then
+                            file_count=$((file_count + 1))
+                        else
+                            # Fallback to copy
+                            cp "$src_file" "$dest_file"
+                        fi
+                    fi
+                done
+            fi
+        done
 
-    # storage
-    if [ -d "/storage_init/storage" ]; then
-        rsync -av --ignore-existing /storage_init/storage/ /workspace/storage/
-    fi
+        # Now copy from /storage (read-write storage) - these override storage_init
+        if [ -d "/storage" ]; then
+            echo "Loading from storage (overwrite mode)..."
+            for subdir in exports imports logs storage; do
+                if [ -d "/storage/$subdir" ] && [ "$(ls -A /storage/$subdir 2>/dev/null)" ]; then
+                    find "/storage/$subdir" -type f 2>/dev/null | while read src_file; do
+                        rel_path="${src_file#/storage/$subdir/}"
+                        dest_file="/workspace/$subdir/$rel_path"
+                        dest_dir="$(dirname "$dest_file")"
 
-    # Now copy from /storage (read-write storage) - these override storage_init
-    if [ -d "/storage" ]; then
-        if [ -d "/storage/exports" ]; then
-            rsync -av /storage/exports/ /workspace/exports/
+                        mkdir -p "$dest_dir"
+                        cp -f "$src_file" "$dest_file"
+                    done
+                fi
+            done
         fi
-        if [ -d "/storage/imports" ]; then
-            rsync -av /storage/imports/ /workspace/imports/
-        fi
-        if [ -d "/storage/logs" ]; then
-            rsync -av /storage/logs/ /workspace/logs/
-        fi
-        if [ -d "/storage/storage" ]; then
-            rsync -av /storage/storage/ /workspace/storage/
-        fi
-    fi
 
-    echo "Workspace initialization complete"
+        # Create flag file
+        touch "$INIT_FLAG"
+        echo "Workspace initialization complete: $file_count files linked from storage_init"
+    fi
 else
     echo "No storage_init found, using storage only"
     mkdir -p /workspace/exports /workspace/imports /workspace/logs /workspace/storage
