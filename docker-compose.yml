@@ -46,6 +46,7 @@ services:
     image: army_ai_backend_dev
     container_name: army_ai_backend_dev
     restart: unless-stopped
+    privileged: true  # Required for OverlayFS mount
     ipc: host  # Shared memory for PyTorch
     pid: host  # Access host processes for system monitoring
     ulimits:
@@ -90,8 +91,11 @@ services:
     ports:
       - "${BACKEND_PORT}:8000"
     volumes:
-      - ./storage_init:/storage_init:ro  # 읽기 전용 초기 데이터
-      - ./storage:/storage:rw             # 읽기/쓰기 작업 데이터
+      # OverlayFS layers
+      - ./storage_init:/storage_init:ro   # Lower layer (읽기 전용 초기 데이터)
+      - backend_storage_rw:/storage_rw:rw # Upper/Work layer (OverlayFS용)
+      # /storage는 entrypoint에서 OverlayFS로 마운트됨
+
       - ./backups:/backups:rw
       - backend_logs_dev:/app/logs
       # Hot reload: mount source code (uncomment if backend supports hot reload)
@@ -107,7 +111,6 @@ services:
       - /dev/video1:/dev/video1
       - /dev/video2:/dev/video2
       - /dev/video3:/dev/video3
-    privileged: true  # Required for camera access
     entrypoint: ["/entrypoint.sh"]
     depends_on:
       postgres:
@@ -202,7 +205,7 @@ services:
     restart: unless-stopped
     tty: true
     stdin_open: true
-    privileged: true
+    privileged: true  # Required for OverlayFS mount (already enabled)
     shm_size: "8g"
     mem_limit: 16g
     environment:
@@ -213,8 +216,12 @@ services:
       - "${CARLA_SIMULATOR_STREAMING_PORT1}:2001"  # CARLA streaming port 1
       - "${CARLA_SIMULATOR_STREAMING_PORT2}:2002"  # CARLA streaming port 2
     volumes:
-      - ./storage_init/simulator:/storage_init:ro  # 읽기 전용 초기 차량 데이터
-      - ./storage/simulator:/storage:rw            # 읽기/쓰기 차량 데이터
+      # OverlayFS layers for Vehicles
+      - ./storage_init/simulator:/storage_init:ro  # Lower layer (읽기 전용 초기 차량)
+      - ./storage/simulator:/storage:ro            # Middle layer (커스텀 차량, 읽기 전용)
+      - carla_sim_storage_rw:/storage_rw:rw        # Upper/Work layer (OverlayFS용)
+      # CARLA_VEHICLES_PATH는 entrypoint에서 OverlayFS로 마운트됨
+
       - ./carla_simulator_entrypoint.sh:/entrypoint.sh:ro
     networks:
       - army_ai_network_dev
@@ -242,6 +249,7 @@ services:
     image: army_carla_client_backend:0.0.2
     container_name: army_ai_carla_backend_dev
     restart: unless-stopped
+    privileged: true  # Required for OverlayFS mount
     tty: true
     stdin_open: true
     shm_size: "16g"
@@ -256,9 +264,13 @@ services:
       - "${CARLA_CLIENT_BACKEND_JUPYTER_PORT}:8888"  # Jupyter/API port
       - "${CARLA_CLIENT_BACKEND_SERVICE_PORT}:1455"  # Additional service port
     volumes:
-      # Mount storage_init (read-only) and storage (read-write)
-      - ./storage_init/3d:/storage_init:ro  # 읽기 전용 초기 데이터
-      - ./storage/3d:/storage:rw            # 읽기/쓰기 작업 데이터
+      # OverlayFS layers
+      - ./storage_init/3d:/storage_init:ro   # Lower layer (읽기 전용 초기 데이터)
+      - ./storage/3d:/storage:ro             # Middle layer (기존 데이터, 읽기 전용)
+      - carla_client_storage_rw:/storage_rw:rw # Upper/Work layer (OverlayFS용)
+      # /storage_merged는 entrypoint에서 OverlayFS로 마운트되고
+      # /workspace는 /storage_merged로 symlink됨
+
       - ./carla_client_entrypoint.sh:/entrypoint.sh:ro
     networks:
       - army_ai_network_dev
@@ -293,6 +305,19 @@ volumes:
   backend_logs_dev:
     driver: local
     name: army_ai_backend_logs_dev
+
+  # OverlayFS upper/work directories
+  backend_storage_rw:
+    driver: local
+    name: army_ai_backend_storage_rw
+
+  carla_sim_storage_rw:
+    driver: local
+    name: army_ai_carla_sim_storage_rw
+
+  carla_client_storage_rw:
+    driver: local
+    name: army_ai_carla_client_storage_rw
 
   frontend_node_modules:
     driver: local

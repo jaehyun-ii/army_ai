@@ -5,36 +5,34 @@ echo "==================================="
 echo "Army AI Backend - Starting..."
 echo "==================================="
 
-# Initialize storage from storage_init if needed
-INIT_FLAG="/storage/.initialized"
-
+# OverlayFS 마운트 (복사 없이 레이어링)
 if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
-    if [ -f "$INIT_FLAG" ]; then
-        echo "Storage already initialized (found $INIT_FLAG), skipping..."
+    if ! mountpoint -q /storage 2>/dev/null; then
+        echo "Setting up OverlayFS (no copy, instant)..."
+
+        # 디렉토리 생성
+        mkdir -p /storage_rw/upper /storage_rw/work /storage
+
+        # OverlayFS 마운트
+        # lowerdir: 읽기 전용 (storage_init)
+        # upperdir: 읽기/쓰기 (새 파일, 수정사항)
+        # workdir: overlay 작업용
+        mount -t overlay overlay \
+            -o lowerdir=/storage_init,upperdir=/storage_rw/upper,workdir=/storage_rw/work \
+            /storage
+
+        echo "✅ OverlayFS mounted: /storage"
+        echo "   Lower (RO): /storage_init"
+        echo "   Upper (RW): /storage_rw/upper"
     else
-        echo "First-time initialization from storage_init using rsync..."
-
-        # Ensure storage directories exist
-        mkdir -p /storage/2d/datasets /storage/2d/patches
-        mkdir -p /storage/3d/datasets /storage/3d/patches
-        mkdir -p /storage/model /storage/evaluate
-
-        # Use rsync for efficient synchronization
-        # -a: archive mode (preserves permissions, timestamps, etc.)
-        # --ignore-existing: only copy files that don't exist in destination
-        # --info=progress2: show overall progress instead of file-by-file
-        echo "Syncing files from storage_init..."
-        rsync -a --ignore-existing --info=progress2 /storage_init/ /storage/
-
-        # Create flag file
-        touch "$INIT_FLAG"
-        echo "Initialization complete via rsync"
+        echo "OverlayFS already mounted at /storage"
     fi
 else
-    echo "No storage_init found or empty, skipping initialization"
+    echo "No storage_init found, using regular storage"
+    mkdir -p /storage
 fi
 
-# Ensure storage directories exist
+# Ensure required directories exist
 mkdir -p /storage/2d/datasets /storage/2d/patches
 mkdir -p /storage/3d/datasets /storage/3d/patches
 mkdir -p /storage/model /storage/evaluate

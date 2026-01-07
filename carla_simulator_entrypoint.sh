@@ -7,37 +7,46 @@ echo "==================================="
 
 # CARLA Vehicles blueprint path
 CARLA_VEHICLES_PATH="/home/carla/CarlaUE4/Content/Carla/Blueprints/Vehicles"
-INIT_FLAG="/storage/.vehicles_initialized"
 
-# Initialize vehicles from storage_init if needed
+# OverlayFS 마운트 for Vehicles (복사 없이 레이어링)
 if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/null)" ]; then
-    if [ -f "$INIT_FLAG" ]; then
-        echo "Vehicles already initialized (found $INIT_FLAG), skipping..."
-    else
-        echo "First-time vehicle initialization using rsync..."
+    if ! mountpoint -q "$CARLA_VEHICLES_PATH" 2>/dev/null; then
+        echo "Setting up OverlayFS for Vehicles (no copy, instant)..."
 
         # Ensure CARLA vehicles directory exists
         mkdir -p "$CARLA_VEHICLES_PATH"
+        mkdir -p /storage_rw/upper /storage_rw/work
 
-        # Sync vehicles from storage_init using rsync (only new files)
-        echo "Syncing vehicles from storage_init..."
-        rsync -a --ignore-existing --info=progress2 /storage_init/Vehicles/ "$CARLA_VEHICLES_PATH/"
+        # OverlayFS 마운트
+        # lowerdir: 읽기 전용 (storage_init/Vehicles)
+        # upperdir: 읽기/쓰기 (새 차량, 수정사항)
+        # workdir: overlay 작업용
 
-        # Sync custom vehicles from storage (these override storage_init)
+        # storage/Vehicles가 있으면 2계층 overlay
         if [ -d "/storage/Vehicles" ] && [ "$(ls -A /storage/Vehicles 2>/dev/null)" ]; then
-            echo "Loading custom vehicles from storage (overwrite)..."
-            rsync -a --info=progress2 /storage/Vehicles/ "$CARLA_VEHICLES_PATH/"
+            echo "Using 2-layer overlay: storage_init (base) + storage (custom)"
+            mount -t overlay overlay \
+                -o lowerdir=/storage/Vehicles:/storage_init/Vehicles,upperdir=/storage_rw/upper,workdir=/storage_rw/work \
+                "$CARLA_VEHICLES_PATH"
+        else
+            echo "Using single overlay: storage_init (base)"
+            mount -t overlay overlay \
+                -o lowerdir=/storage_init/Vehicles,upperdir=/storage_rw/upper,workdir=/storage_rw/work \
+                "$CARLA_VEHICLES_PATH"
         fi
 
-        # Create flag file
-        mkdir -p /storage
-        touch "$INIT_FLAG"
-        echo "Vehicle initialization complete via rsync"
+        echo "✅ OverlayFS mounted: $CARLA_VEHICLES_PATH"
+        echo "   Lower: /storage_init/Vehicles (+ /storage/Vehicles if exists)"
+        echo "   Upper: /storage_rw/upper"
+    else
+        echo "OverlayFS already mounted at $CARLA_VEHICLES_PATH"
     fi
 else
     echo "No storage_init vehicles found, using default CARLA vehicles"
+    mkdir -p "$CARLA_VEHICLES_PATH"
 fi
 
+echo "Vehicles ready"
 echo "==================================="
 
 # Execute CARLA
