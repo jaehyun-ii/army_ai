@@ -46,7 +46,7 @@ services:
     image: army_ai_backend_dev
     container_name: army_ai_backend_dev
     restart: unless-stopped
-    privileged: true  # Required for OverlayFS mount
+    # privileged removed - OverlayFS now mounted on host
     ipc: host  # Shared memory for PyTorch
     pid: host  # Access host processes for system monitoring
     ulimits:
@@ -91,11 +91,8 @@ services:
     ports:
       - "${BACKEND_PORT}:8000"
     volumes:
-      # OverlayFS layers
-      - ./storage_init:/storage_init:ro     # Lower layer (읽기 전용 초기 데이터)
-      - ./storage:/storage_overlay:rw       # Upper/Work layer (같은 마운트 내)
-      # /storage는 entrypoint에서 OverlayFS로 마운트됨
-      # upperdir: /storage_overlay, workdir: /storage_overlay/.overlayfs_work
+      # Storage - OverlayFS mounted on host (storage_base + storage_data → storage)
+      - ./storage:/storage:rw
 
       - ./backups:/backups:rw
       - backend_logs_dev:/app/logs
@@ -208,7 +205,7 @@ services:
     user: root  # Run as root to fix volume permissions, then switch to carla
     tty: true
     stdin_open: true
-    privileged: true  # Required for OverlayFS mount (already enabled)
+    # privileged removed - OverlayFS now mounted on host
     shm_size: "8g"
     mem_limit: 16g
     environment:
@@ -219,10 +216,8 @@ services:
       - "${CARLA_SIMULATOR_STREAMING_PORT1}:2001"  # CARLA streaming port 1
       - "${CARLA_SIMULATOR_STREAMING_PORT2}:2002"  # CARLA streaming port 2
     volumes:
-      # OverlayFS layers for Vehicles
-      - ./storage_init/simulator:/storage_init:ro  # Lower layer (읽기 전용 초기 차량)
-      - ./storage/simulator:/storage_overlay:rw    # Upper/Work layer (같은 마운트 내)
-      # CARLA_VEHICLES_PATH는 entrypoint에서 OverlayFS로 마운트됨
+      # Storage - OverlayFS mounted on host (storage_base + storage_data → storage)
+      - ./storage/simulator/Vehicles:/home/carla/CarlaUE4/Content/Carla/Blueprints/Vehicles:rw
 
       - ./carla_simulator_entrypoint.sh:/entrypoint.sh:ro
     networks:
@@ -251,7 +246,7 @@ services:
     image: army_carla_client_backend:0.0.2
     container_name: army_ai_carla_backend_dev
     restart: unless-stopped
-    privileged: true  # Required for OverlayFS mount
+    # privileged removed - OverlayFS now mounted on host
     tty: true
     stdin_open: true
     shm_size: "16g"
@@ -266,11 +261,8 @@ services:
       - "${CARLA_CLIENT_BACKEND_JUPYTER_PORT}:8888"  # Jupyter/API port
       - "${CARLA_CLIENT_BACKEND_SERVICE_PORT}:1455"  # Additional service port
     volumes:
-      # OverlayFS layers
-      - ./storage_init/3d:/storage_init:ro   # Lower layer (읽기 전용 초기 데이터)
-      - ./storage/3d:/storage_overlay:rw     # Upper/Work layer (같은 마운트 내)
-      # /storage_merged는 entrypoint에서 OverlayFS로 마운트되고
-      # /workspace는 /storage_merged로 symlink됨
+      # Storage - OverlayFS mounted on host (storage_base + storage_data → storage)
+      - ./storage/3d:/workspace:rw
 
       - ./carla_client_entrypoint.sh:/entrypoint.sh:ro
     networks:
