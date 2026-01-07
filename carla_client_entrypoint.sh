@@ -12,21 +12,19 @@ if [ -d "/storage_init" ] && [ "$(ls -A /storage_init 2>/dev/null)" ]; then
         echo "Setting up OverlayFS (no copy, instant)..."
 
         # 호스트 ./storage/3d에 직접 저장하도록 설정
-        mkdir -p /storage_rw /storage_merged
-        # workdir는 upperdir와 같은 파일시스템에 있어야 함
-        mkdir -p /storage_rw/.overlay_work
+        mkdir -p /storage_upper /storage_work /storage_merged
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init)
-        # upperdir: 읽기/쓰기 (호스트 ./storage/3d에 직접 저장)
-        # workdir: overlay 작업용 (upperdir와 같은 파일시스템)
+        # upperdir: 읽기/쓰기 (호스트 ./storage/3d에 저장)
+        # workdir: overlay 작업용 (upperdir와 분리된 디렉토리)
         mount -t overlay overlay \
-            -o lowerdir=/storage_init,upperdir=/storage_rw,workdir=/storage_rw/.overlay_work \
+            -o lowerdir=/storage_init,upperdir=/storage_upper,workdir=/storage_work \
             /storage_merged
 
         echo "✅ OverlayFS mounted: /storage_merged"
         echo "   Lower (RO): /storage_init"
-        echo "   Upper (RW): /storage_rw → 호스트 ./storage/3d"
+        echo "   Upper (RW): /storage_upper → 호스트 ./storage/3d"
     else
         echo "OverlayFS already mounted at /storage_merged"
     fi
