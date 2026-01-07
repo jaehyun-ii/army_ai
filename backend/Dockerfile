@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     postgresql-client \
     curl \
+    rsync \
     libgl1 \
     libglib2.0-0 \
     libpango-1.0-0 \
@@ -79,15 +80,20 @@ WORKDIR /app
 # 7. 애플리케이션 코드 복사
 COPY app ./app
 
-# 8. 필요한 디렉토리 생성
+# 8. Entrypoint 스크립트 복사
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# 9. 필요한 디렉토리 생성
 RUN mkdir -p /app/storage /app/logs /app/storage/gan_weights/biggan
 
-# 9. 포트 노출
+# 10. 포트 노출
 EXPOSE 8000
 
-# 10. Health check
+# 11. Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# 11. FastAPI 서버 시작
+# 12. Entrypoint 및 CMD 설정
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
