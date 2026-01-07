@@ -17,11 +17,9 @@ if [ -d "/storage_init/Vehicles" ] && [ "$(ls -A /storage_init/Vehicles 2>/dev/n
         mkdir -p "$CARLA_VEHICLES_PATH"
 
         # Create storage_rw with proper permissions
-        # Volume may be owned by root, change ownership to current user
-        mkdir -p /storage_rw
-        CURRENT_USER=$(whoami)
-        chown -R $CURRENT_USER:$CURRENT_USER /storage_rw 2>/dev/null || true
+        # Running as root in docker-compose to fix volume permissions
         mkdir -p /storage_rw/upper /storage_rw/work
+        chmod -R 777 /storage_rw
 
         # OverlayFS 마운트
         # lowerdir: 읽기 전용 (storage_init/Vehicles)
@@ -55,5 +53,6 @@ fi
 echo "Vehicles ready"
 echo "==================================="
 
-# Execute CARLA
-exec /bin/bash CarlaUE4.sh "$@"
+# Execute CARLA as carla user (we started as root to fix permissions)
+echo "Switching to carla user and starting CARLA..."
+exec su -s /bin/bash carla -c "/bin/bash CarlaUE4.sh $*"

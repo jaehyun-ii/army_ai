@@ -204,6 +204,7 @@ services:
     image: army_ai_sim:0.0.3
     container_name: army_ai_sim_dev
     restart: unless-stopped
+    user: root  # Run as root to fix volume permissions, then switch to carla
     tty: true
     stdin_open: true
     privileged: true  # Required for OverlayFS mount (already enabled)
