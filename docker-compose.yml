@@ -93,7 +93,6 @@ services:
     volumes:
       # Storage - OverlayFS mounted on host (storage_base + storage_data → storage)
       - ./storage:/storage:rw
-
       - ./backups:/backups:rw
       - backend_logs_dev:/app/logs
       # Hot reload: mount source code (uncomment if backend supports hot reload)
@@ -109,6 +108,7 @@ services:
       - /dev/video1:/dev/video1
       - /dev/video2:/dev/video2
       - /dev/video3:/dev/video3
+    privileged: true
     entrypoint: ["/entrypoint.sh"]
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     depends_on:
@@ -262,8 +262,7 @@ services:
       - "${CARLA_CLIENT_BACKEND_SERVICE_PORT}:1455"  # Additional service port
     volumes:
       # Storage - OverlayFS mounted on host (storage_base + storage_data → storage)
-      - ./storage/3d:/workspace:rw
-
+      - ./storage/3d/exports:/workspace/exports:rw
       - ./carla_client_entrypoint.sh:/entrypoint.sh:ro
     networks:
       - army_ai_network_dev
