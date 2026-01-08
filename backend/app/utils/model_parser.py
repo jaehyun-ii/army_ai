@@ -15,12 +15,14 @@ class ModelParser:
     """Parse model files to extract metadata."""
 
     @staticmethod
-    def parse_pt_file(file_path: Path) -> Dict[str, Any]:
+    def parse_pt_file(file_path: Path, hint_model_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Extract metadata from a PyTorch .pt file.
 
         Args:
             file_path: Path to the .pt file
+            hint_model_type: Model type hint from config file (yolo, rtdetr, efficientdet, etc.)
+                           Used to select the appropriate loader
 
         Returns:
             Dictionary containing extracted metadata:
@@ -41,25 +43,31 @@ class ModelParser:
         }
 
         try:
-            # Try to load with ultralytics (supports both YOLO and RT-DETR)
+            # Skip ultralytics for MMDetection models (EfficientDet, Faster R-CNN, etc.)
+            is_mmdet_model = hint_model_type and hint_model_type.lower() in ['efficientdet', 'faster_rcnn', 'fasterrcnn', 'mask_rcnn', 'maskrcnn']
+
+            if is_mmdet_model:
+                logger.info(f"Skipping ultralytics loader for MMDetection model: {hint_model_type}")
+                # Will fall through to torch.load() below
+                raise Exception("MMDetection model - use torch.load")
+
+            # Try to load with ultralytics (supports YOLO and RT-DETR)
+            # Use hint_model_type from config file to select the appropriate loader
             try:
                 from ultralytics import YOLO, RTDETR
 
-                # First, try to detect model type from filename
-                filename_lower = file_path.name.lower()
-                is_rtdetr = 'rtdetr' in filename_lower or 'rt-detr' in filename_lower
-
-                # Load model with appropriate loader
-                if is_rtdetr:
-                    try:
-                        model = RTDETR(str(file_path))
-                        metadata["model_type"] = "rtdetr"
-                        logger.info("Loaded as RT-DETR based on filename")
-                    except Exception as rtdetr_error:
-                        logger.debug(f"Failed to load as RT-DETR: {rtdetr_error}")
-                        # Fallback to YOLO loader
-                        model = YOLO(str(file_path))
+                # Select loader based on model type hint from config
+                if hint_model_type and hint_model_type.lower() == 'rtdetr':
+                    logger.info(f"Using RTDETR loader based on config hint: {hint_model_type}")
+                    model = RTDETR(str(file_path))
+                    metadata["model_type"] = "rtdetr"
+                elif hint_model_type and 'yolo' in hint_model_type.lower():
+                    logger.info(f"Using YOLO loader based on config hint: {hint_model_type}")
+                    model = YOLO(str(file_path))
+                    metadata["model_type"] = "yolo"
                 else:
+                    # Default: try YOLO loader (works for most ultralytics models)
+                    logger.info("Using YOLO loader (no specific hint or default)")
                     model = YOLO(str(file_path))
 
                 # Detect model type from task or model architecture
@@ -263,7 +271,21 @@ class ModelParser:
                         metadata["input_size"] = list(min_scale)
                         logger.info(f"Extracted input size (smallest scale): {metadata['input_size']}")
 
-                metadata["model_type"] = "efficientdet"
+                # Extract model type from model dict
+                # Pattern: model = dict(..., type='EfficientDet')
+                # We need to find the TOP-LEVEL type (the last one before the closing parenthesis)
+                # Using greedy matching to get the last type in the model dict
+                model_type_pattern = r'model\s*=\s*dict\s*\(.*type\s*=\s*[\'"]([^\'"]+)[\'"]\s*\)'
+                model_type_match = re.search(model_type_pattern, content, re.DOTALL)
+                if model_type_match:
+                    model_type_raw = model_type_match.group(1)
+                    # Normalize: 'EfficientDet' -> 'efficientdet', 'YOLO' -> 'yolo', etc.
+                    metadata["model_type"] = model_type_raw.lower()
+                    logger.info(f"Extracted model_type from model dict: {metadata['model_type']}")
+                else:
+                    # Fallback: assume efficientdet if not found
+                    metadata["model_type"] = "efficientdet"
+                    logger.warning("Could not extract model type from config, defaulting to 'efficientdet'")
 
             except Exception as e:
                 logger.error(f"Error parsing Python config file {file_path}: {e}")
@@ -306,14 +328,20 @@ class ModelParser:
                 elif isinstance(imgsz, (list, tuple)):
                     metadata["input_size"] = list(imgsz)
 
-            # Try to detect model type from YAML content
-            yaml_str = str(yaml_data).lower()
-            if 'yolo' in yaml_str:
-                metadata["model_type"] = "yolo"
-            elif 'detr' in yaml_str or 'rtdetr' in yaml_str:
-                metadata["model_type"] = "detr"
-            elif 'faster' in yaml_str and 'rcnn' in yaml_str:
-                metadata["model_type"] = "faster_rcnn"
+            # Try to detect model type from YAML
+            # Priority 1: Check if model_type field exists (highest priority)
+            if 'model_type' in yaml_data:
+                metadata["model_type"] = yaml_data['model_type']
+                logger.info(f"Found model_type field: {metadata['model_type']}")
+            else:
+                # Priority 2: Fallback to keyword search in YAML content
+                yaml_str = str(yaml_data).lower()
+                if 'yolo' in yaml_str:
+                    metadata["model_type"] = "yolo"
+                elif 'detr' in yaml_str or 'rtdetr' in yaml_str:
+                    metadata["model_type"] = "detr"
+                elif 'faster' in yaml_str and 'rcnn' in yaml_str:
+                    metadata["model_type"] = "faster_rcnn"
 
             logger.info(f"Successfully parsed config file from {file_path}")
 
@@ -334,7 +362,11 @@ class ModelParser:
     @staticmethod
     def merge_metadata(pt_metadata: Dict[str, Any], yaml_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Merge metadata from .pt and .yaml files, with .pt taking precedence.
+        Merge metadata from .pt and .yaml files.
+
+        Priority:
+        - model_type: YAML takes precedence (explicit config > auto-detection)
+        - Other fields: .pt takes precedence
 
         Args:
             pt_metadata: Metadata extracted from .pt file
@@ -349,9 +381,17 @@ class ModelParser:
             return merged
 
         # YAML provides fallback values when PT doesn't have them
-        for key in ['class_names', 'num_classes', 'input_size', 'model_type']:
+        for key in ['class_names', 'num_classes', 'input_size']:
             if merged.get(key) is None and yaml_metadata.get(key) is not None:
                 merged[key] = yaml_metadata[key]
+
+        # Special handling for model_type: YAML takes precedence if explicitly set
+        # This ensures RT-DETR models are not misidentified as YOLO
+        if yaml_metadata.get('model_type') and yaml_metadata['model_type'] != 'unknown':
+            merged['model_type'] = yaml_metadata['model_type']
+            logger.info(f"Using model_type from config file: {merged['model_type']}")
+        elif merged.get('model_type') is None and yaml_metadata.get('model_type'):
+            merged['model_type'] = yaml_metadata['model_type']
 
         # Add raw YAML data to additional info
         if "raw_yaml" in yaml_metadata:
@@ -366,6 +406,16 @@ class ModelParser:
     ) -> Tuple[Dict[str, Any], List[str]]:
         """
         Extract comprehensive model information from .pt and/or config files.
+
+        Model type priority:
+        1. Config file (yaml/py) model_type field (highest - explicit configuration)
+        2. .pt file architecture inspection (fallback - auto-detection)
+        3. Default to 'unknown' (lowest)
+
+        Processing order:
+        1. Parse config file first to get model_type hint
+        2. Use model_type hint to select appropriate loader for .pt file
+        3. Merge metadata with config taking precedence
 
         Args:
             weights_path: Path to .pt file (optional)
@@ -384,20 +434,24 @@ class ModelParser:
 
         pt_metadata = {}
         yaml_metadata = {}
+        hint_model_type = None
 
-        # Parse .pt file
-        if weights_path:
-            if not weights_path.exists():
-                errors.append(f"Weights file not found: {weights_path}")
-            else:
-                pt_metadata = ModelParser.parse_pt_file(weights_path)
-
-        # Parse config file (.yaml/.yml or .py)
+        # Parse config file FIRST to get model_type hint
         if yaml_path:
             if not yaml_path.exists():
                 errors.append(f"Config file not found: {yaml_path}")
             else:
                 yaml_metadata = ModelParser.parse_config_file(yaml_path)
+                hint_model_type = yaml_metadata.get('model_type')
+                if hint_model_type:
+                    logger.info(f"Found model_type hint from config: {hint_model_type}")
+
+        # Parse .pt file using the model_type hint
+        if weights_path:
+            if not weights_path.exists():
+                errors.append(f"Weights file not found: {weights_path}")
+            else:
+                pt_metadata = ModelParser.parse_pt_file(weights_path, hint_model_type)
 
         # Merge metadata
         if pt_metadata or yaml_metadata:

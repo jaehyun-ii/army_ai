@@ -61,7 +61,9 @@ async def upload_model_for_estimator(
 
     try:
         if weights_file:
-            temp_weights = tempfile.NamedTemporaryFile(delete=False, suffix='.pt')
+            # 원본 파일의 확장자 유지 (.pt 또는 .pth)
+            file_ext = Path(weights_file.filename).suffix or '.pt'
+            temp_weights = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
             shutil.copyfileobj(weights_file.file, temp_weights)
             temp_weights.close()
             temp_weights_path = Path(temp_weights.name)
@@ -77,6 +79,7 @@ async def upload_model_for_estimator(
             yaml_file.file.seek(0)  # Reset file pointer
 
         # Extract metadata from files
+        # Model type will be determined from config file (highest priority) or .pt architecture
         metadata, errors = ModelParser.extract_model_info(temp_weights_path, temp_yaml_path)
 
         # Use auto-detected values as defaults, allow manual override

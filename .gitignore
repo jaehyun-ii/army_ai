@@ -111,3 +111,5 @@ storage_base/*
 storage_data/*    
 storage_work/*       
 storage/*           
+
+test/*
