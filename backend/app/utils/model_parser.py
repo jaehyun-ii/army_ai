@@ -227,20 +227,32 @@ class ModelParser:
                         metadata["num_classes"] = len(class_names)
                         logger.info(f"Extracted {len(class_names)} classes from Python config")
 
-                # Try to extract input size from test_pipeline's Resize scale
-                # Pattern matches: scale=(768, 768) or scale=(\n    768,\n    768,\n)
-                # First, try to find scale in test_pipeline section
-                test_pipeline_match = re.search(r'test_pipeline\s*=\s*\[(.*?)(?=\n\w+\s*=|\Z)', content, re.DOTALL)
-                if test_pipeline_match:
-                    test_pipeline_section = test_pipeline_match.group(1)
-                    scale_pattern = r'scale\s*=\s*\(\s*(\d+)\s*,\s*(\d+)\s*[,\)]'
-                    scale_match = re.search(scale_pattern, test_pipeline_section, re.MULTILINE)
-                    if scale_match:
-                        h, w = int(scale_match.group(1)), int(scale_match.group(2))
-                        metadata["input_size"] = [h, w]
-                        logger.info(f"Extracted input size from test_pipeline: {metadata['input_size']}")
+                # Try to extract input size with the following priority:
+                # 1. image_size variable (highest priority - actual input size)
+                # 2. test_pipeline's Resize scale (fallback)
+                # 3. smallest scale found anywhere (last resort)
 
-                # If not found in test_pipeline, use smallest scale (likely inference size)
+                # Priority 1: Look for image_size variable (e.g., image_size = 768)
+                image_size_pattern = r'image_size\s*=\s*(\d+)'
+                image_size_match = re.search(image_size_pattern, content)
+                if image_size_match:
+                    size = int(image_size_match.group(1))
+                    metadata["input_size"] = [size, size]
+                    logger.info(f"Extracted input size from image_size variable: {metadata['input_size']}")
+
+                # Priority 2: If not found, try test_pipeline's Resize scale
+                if not metadata["input_size"]:
+                    test_pipeline_match = re.search(r'test_pipeline\s*=\s*\[(.*?)(?=\n\w+\s*=|\Z)', content, re.DOTALL)
+                    if test_pipeline_match:
+                        test_pipeline_section = test_pipeline_match.group(1)
+                        scale_pattern = r'scale\s*=\s*\(\s*(\d+)\s*,\s*(\d+)\s*[,\)]'
+                        scale_match = re.search(scale_pattern, test_pipeline_section, re.MULTILINE)
+                        if scale_match:
+                            h, w = int(scale_match.group(1)), int(scale_match.group(2))
+                            metadata["input_size"] = [h, w]
+                            logger.info(f"Extracted input size from test_pipeline: {metadata['input_size']}")
+
+                # Priority 3: If still not found, use smallest scale (likely inference size)
                 if not metadata["input_size"]:
                     scale_pattern = r'scale\s*=\s*\(\s*(\d+)\s*,\s*(\d+)\s*[,\)]'
                     scales = re.findall(scale_pattern, content, re.MULTILINE | re.DOTALL)
@@ -249,7 +261,7 @@ class ModelParser:
                         scales_int = [(int(h), int(w)) for h, w in scales]
                         min_scale = min(scales_int, key=lambda x: x[0] * x[1])  # Smallest area
                         metadata["input_size"] = list(min_scale)
-                        logger.info(f"Extracted input size (smallest): {metadata['input_size']}")
+                        logger.info(f"Extracted input size (smallest scale): {metadata['input_size']}")
 
                 metadata["model_type"] = "efficientdet"
 

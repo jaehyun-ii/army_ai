@@ -586,10 +586,40 @@ class ModelFactory:
                         "Check the logs above for detailed error information."
                     ) from e
 
-            # Extract model configuration
-            input_size = config.get('input_size', [768, 768])
+            # Extract input size from MMDetection config (highest priority)
+            # This ensures we use the exact size the model was trained with
+            input_size = None
 
-            # Create estimator
+            # Try to get from test_pipeline in config
+            if hasattr(cfg, 'test_dataloader') and hasattr(cfg.test_dataloader, 'dataset'):
+                test_pipeline = cfg.test_dataloader.dataset.get('pipeline', [])
+                for transform in test_pipeline:
+                    if isinstance(transform, dict) and transform.get('type') == 'Resize':
+                        scale = transform.get('scale')
+                        if scale:
+                            input_size = list(scale) if isinstance(scale, tuple) else scale
+                            logger.info(f"Found input size from test_dataloader.dataset.pipeline: {input_size}")
+                            break
+
+            # Fallback to test_pipeline (older MMDet versions)
+            if input_size is None and hasattr(cfg, 'test_pipeline'):
+                for transform in cfg.test_pipeline:
+                    if isinstance(transform, dict) and transform.get('type') == 'Resize':
+                        scale = transform.get('scale')
+                        if scale:
+                            input_size = list(scale) if isinstance(scale, tuple) else scale
+                            logger.info(f"Found input size from test_pipeline: {input_size}")
+                            break
+
+            # Final fallback to passed config (from database)
+            if input_size is None:
+                input_size = config.get('input_size', [768, 768])
+                logger.warning(f"Using fallback input size from database: {input_size}")
+
+            logger.info(f"EfficientDet final input size: {input_size}")
+
+            # Create estimator with the input size from MMDetection config
+            # The data_preprocessor will handle padding to ensure BiFPN compatibility
             estimator = PyTorchEfficientDet(
                 model=model,
                 input_shape=(3, *input_size),

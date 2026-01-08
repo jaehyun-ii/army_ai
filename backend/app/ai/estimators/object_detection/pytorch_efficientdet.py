@@ -668,13 +668,24 @@ class PyTorchEfficientDet(PyTorchObjectDetector):
                 from mmdet.structures import DetDataSample
                 from mmengine.structures import InstanceData
 
+                # Apply MMDetection's data preprocessor for proper padding
+                # This ensures BiFPN gets correctly padded inputs
+                if hasattr(self._model, 'data_preprocessor'):
+                    preprocessed_data = self._model.data_preprocessor({
+                        'inputs': x_batch,
+                        'data_samples': None
+                    }, training=False)
+                    x_batch_preprocessed = preprocessed_data['inputs']
+                else:
+                    x_batch_preprocessed = x_batch
+
                 batch_data_samples = []
-                for i in range(x_batch.shape[0]):
+                for i in range(x_batch_preprocessed.shape[0]):
                     data_sample = DetDataSample()
                     # Set required metadata
                     data_sample.set_metainfo({
-                        'img_shape': (x_batch.shape[2], x_batch.shape[3]),  # (H, W)
-                        'ori_shape': (x_batch.shape[2], x_batch.shape[3]),  # (H, W)
+                        'img_shape': (x_batch_preprocessed.shape[2], x_batch_preprocessed.shape[3]),  # (H, W)
+                        'ori_shape': (x_batch.shape[2], x_batch.shape[3]),  # (H, W) - original before padding
                         'scale_factor': (1.0, 1.0),  # No scaling
                     })
                     batch_data_samples.append(data_sample)
@@ -682,10 +693,10 @@ class PyTorchEfficientDet(PyTorchObjectDetector):
                 # Try to use predict() method if available (standard MMDetection models)
                 # Otherwise use forward() with mode='predict' (fallback or custom models)
                 if hasattr(self._model, 'predict') and callable(getattr(self._model, 'predict')):
-                    outputs = self._model.predict(x_batch, batch_data_samples=batch_data_samples, rescale=False)
+                    outputs = self._model.predict(x_batch_preprocessed, batch_data_samples=batch_data_samples, rescale=False)
                 else:
                     # Use forward() with mode='predict' for models without predict() method
-                    outputs = self._model(x_batch, data_samples=batch_data_samples, mode='predict')
+                    outputs = self._model(x_batch_preprocessed, data_samples=batch_data_samples, mode='predict')
 
             predictions_x1y1x2y2 = self._translate_predictions(outputs)
             predictions.extend(predictions_x1y1x2y2)
