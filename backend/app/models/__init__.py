@@ -29,7 +29,6 @@ from app.models.evaluation import (
 )
 from app.models.experiment import Experiment
 from app.models.annotation import Annotation, AnnotationType
-from app.models.vehicle_model import VehicleModel, VehicleCategory, ModelFormat
 
 __all__ = [
     "User",
@@ -58,7 +57,4 @@ __all__ = [
     "Experiment",
     "Annotation",
     "AnnotationType",
-    "VehicleModel",
-    "VehicleCategory",
-    "ModelFormat",
 ]
