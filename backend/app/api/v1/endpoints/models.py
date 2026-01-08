@@ -67,7 +67,6 @@ async def upload_model_for_estimator(
             shutil.copyfileobj(weights_file.file, temp_weights)
             temp_weights.close()
             temp_weights_path = Path(temp_weights.name)
-            weights_file.file.seek(0)  # Reset file pointer for later use
 
         if yaml_file:
             # Support both .yaml/.yml and .py config files (for MMDetection)
@@ -76,7 +75,6 @@ async def upload_model_for_estimator(
             shutil.copyfileobj(yaml_file.file, temp_yaml)
             temp_yaml.close()
             temp_yaml_path = Path(temp_yaml.name)
-            yaml_file.file.seek(0)  # Reset file pointer
 
         # Extract metadata from files
         # Model type will be determined from config file (highest priority) or .pt architecture
@@ -149,28 +147,29 @@ async def upload_model_for_estimator(
                 detail="Could not extract class information. Please provide labelmap_json manually."
             )
 
+        # Save the model file (inside try block before cleanup)
+        from app.core.config import settings
+        storage_base = Path(settings.STORAGE_MODELS_ROOT)
+        model_dir = storage_base / model_name
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use temp files instead of re-reading upload streams (which may fail after metadata extraction)
+        if weights_file and temp_weights_path:
+            weights_path = model_dir / weights_file.filename
+            # Copy from temp file to avoid stream position issues
+            shutil.copy2(temp_weights_path, weights_path)
+
+        if yaml_file and temp_yaml_path:
+            yaml_path = model_dir / yaml_file.filename
+            # Copy from temp file to avoid stream position issues
+            shutil.copy2(temp_yaml_path, yaml_path)
+
     finally:
-        # Clean up temp files
+        # Clean up temp files after saving
         if temp_weights_path and temp_weights_path.exists():
             temp_weights_path.unlink()
         if temp_yaml_path and temp_yaml_path.exists():
             temp_yaml_path.unlink()
-
-    # Save the model file
-    from app.core.config import settings
-    storage_base = Path(settings.STORAGE_MODELS_ROOT)
-    model_dir = storage_base / model_name
-    model_dir.mkdir(parents=True, exist_ok=True)
-
-    if weights_file:
-        weights_path = model_dir / weights_file.filename
-        with weights_path.open("wb") as buffer:
-            shutil.copyfileobj(weights_file.file, buffer)
-
-    if yaml_file:
-        yaml_path = model_dir / yaml_file.filename
-        with yaml_path.open("wb") as buffer:
-            shutil.copyfileobj(yaml_file.file, buffer)
 
     # Construct input_spec
     input_spec = None

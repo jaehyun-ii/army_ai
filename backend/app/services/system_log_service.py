@@ -65,6 +65,18 @@ class SystemLogService:
             Created SystemLog instance
         """
         try:
+            # Validate user_id exists if provided
+            if user_id is not None:
+                from app.models.user import User
+                user_query = select(User.id).where(User.id == user_id)
+                result = await self.db.execute(user_query)
+                user_exists = result.scalar_one_or_none()
+                if not user_exists:
+                    # User doesn't exist (likely deleted or invalid JWT token)
+                    # Log warning and set user_id to None to avoid FK constraint violation
+                    logger.warning(f"User ID {user_id} not found in database, setting to None")
+                    user_id = None
+
             # Build log data dict, excluding None values for optional JSONB fields
             log_data = {
                 "log_level": log_level,

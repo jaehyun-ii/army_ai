@@ -46,90 +46,88 @@ class ModelParser:
             # Skip ultralytics for MMDetection models (EfficientDet, Faster R-CNN, etc.)
             is_mmdet_model = hint_model_type and hint_model_type.lower() in ['efficientdet', 'faster_rcnn', 'fasterrcnn', 'mask_rcnn', 'maskrcnn']
 
-            if is_mmdet_model:
-                logger.info(f"Skipping ultralytics loader for MMDetection model: {hint_model_type}")
-                # Will fall through to torch.load() below
-                raise Exception("MMDetection model - use torch.load")
-
             # Try to load with ultralytics (supports YOLO and RT-DETR)
-            # Use hint_model_type from config file to select the appropriate loader
-            try:
-                from ultralytics import YOLO, RTDETR
+            # Skip for MMDetection models (EfficientDet, Faster R-CNN, etc.)
+            if not is_mmdet_model:
+                try:
+                    from ultralytics import YOLO, RTDETR
 
-                # Select loader based on model type hint from config
-                if hint_model_type and hint_model_type.lower() == 'rtdetr':
-                    logger.info(f"Using RTDETR loader based on config hint: {hint_model_type}")
-                    model = RTDETR(str(file_path))
-                    metadata["model_type"] = "rtdetr"
-                elif hint_model_type and 'yolo' in hint_model_type.lower():
-                    logger.info(f"Using YOLO loader based on config hint: {hint_model_type}")
-                    model = YOLO(str(file_path))
-                    metadata["model_type"] = "yolo"
-                else:
-                    # Default: try YOLO loader (works for most ultralytics models)
-                    logger.info("Using YOLO loader (no specific hint or default)")
-                    model = YOLO(str(file_path))
+                    # Select loader based on model type hint from config
+                    if hint_model_type and hint_model_type.lower() == 'rtdetr':
+                        logger.info(f"Using RTDETR loader based on config hint: {hint_model_type}")
+                        model = RTDETR(str(file_path))
+                        metadata["model_type"] = "rtdetr"
+                    elif hint_model_type and 'yolo' in hint_model_type.lower():
+                        logger.info(f"Using YOLO loader based on config hint: {hint_model_type}")
+                        model = YOLO(str(file_path))
+                        metadata["model_type"] = "yolo"
+                    else:
+                        # Default: try YOLO loader (works for most ultralytics models)
+                        logger.info("Using YOLO loader (no specific hint or default)")
+                        model = YOLO(str(file_path))
 
-                # Detect model type from task or model architecture
-                detected_type = None
-                if hasattr(model, 'task'):
-                    task = model.task
-                    metadata["additional_info"]["task"] = task
-                    logger.info(f"Model task: {task}")
+                    # Detect model type from task or model architecture
+                    detected_type = None
+                    if hasattr(model, 'task'):
+                        task = model.task
+                        metadata["additional_info"]["task"] = task
+                        logger.info(f"Model task: {task}")
 
-                # Check model architecture to distinguish RT-DETR from YOLO
-                if hasattr(model, 'model'):
-                    model_obj = model.model
+                    # Check model architecture to distinguish RT-DETR from YOLO
+                    if hasattr(model, 'model'):
+                        model_obj = model.model
 
-                    # Check the last layer (detection head)
-                    if hasattr(model_obj, 'model') and hasattr(model_obj.model, '__getitem__'):
-                        try:
-                            last_layer = model_obj.model[-1]
-                            layer_class_name = last_layer.__class__.__name__
-                            logger.info(f"Detection head type: {layer_class_name}")
+                        # Check the last layer (detection head)
+                        if hasattr(model_obj, 'model') and hasattr(model_obj.model, '__getitem__'):
+                            try:
+                                last_layer = model_obj.model[-1]
+                                layer_class_name = last_layer.__class__.__name__
+                                logger.info(f"Detection head type: {layer_class_name}")
 
-                            if 'RTDETR' in layer_class_name or 'RTDETRDecoder' in layer_class_name:
-                                detected_type = "rtdetr"
-                                logger.info("Detected RT-DETR from model head class")
-                            elif 'Detect' in layer_class_name:
-                                detected_type = "yolo"
-                                logger.info("Detected YOLO from model head class")
-                        except Exception as e:
-                            logger.debug(f"Could not inspect model head: {e}")
+                                if 'RTDETR' in layer_class_name or 'RTDETRDecoder' in layer_class_name:
+                                    detected_type = "rtdetr"
+                                    logger.info("Detected RT-DETR from model head class")
+                                elif 'Detect' in layer_class_name:
+                                    detected_type = "yolo"
+                                    logger.info("Detected YOLO from model head class")
+                            except Exception as e:
+                                logger.debug(f"Could not inspect model head: {e}")
 
-                    # Store YAML config if available
-                    if hasattr(model_obj, 'yaml'):
-                        metadata["additional_info"]["yaml_config"] = model_obj.yaml
+                        # Store YAML config if available
+                        if hasattr(model_obj, 'yaml'):
+                            metadata["additional_info"]["yaml_config"] = model_obj.yaml
 
-                # Set model type (use detected type if found, otherwise keep existing)
-                if detected_type:
-                    metadata["model_type"] = detected_type
-                elif metadata["model_type"] is None:
-                    # Fallback to 'yolo' if not detected
-                    metadata["model_type"] = "yolo"
+                    # Set model type (use detected type if found, otherwise keep existing)
+                    if detected_type:
+                        metadata["model_type"] = detected_type
+                    elif metadata["model_type"] is None:
+                        # Fallback to 'yolo' if not detected
+                        metadata["model_type"] = "yolo"
 
-                # Extract class names
-                if hasattr(model, 'names') and model.names:
-                    if isinstance(model.names, dict):
-                        # Convert dict to list: {0: 'person', 1: 'car'} -> ['person', 'car']
-                        metadata["class_names"] = [model.names[i] for i in sorted(model.names.keys())]
-                    elif isinstance(model.names, list):
-                        metadata["class_names"] = model.names
-                    metadata["num_classes"] = len(metadata["class_names"])
+                    # Extract class names
+                    if hasattr(model, 'names') and model.names:
+                        if isinstance(model.names, dict):
+                            # Convert dict to list: {0: 'person', 1: 'car'} -> ['person', 'car']
+                            metadata["class_names"] = [model.names[i] for i in sorted(model.names.keys())]
+                        elif isinstance(model.names, list):
+                            metadata["class_names"] = model.names
+                        metadata["num_classes"] = len(metadata["class_names"])
 
-                # Extract input size (imgsz)
-                if hasattr(model, 'overrides') and 'imgsz' in model.overrides:
-                    imgsz = model.overrides['imgsz']
-                    if isinstance(imgsz, int):
-                        metadata["input_size"] = [imgsz, imgsz]
-                    elif isinstance(imgsz, (list, tuple)):
-                        metadata["input_size"] = list(imgsz)
+                    # Extract input size (imgsz)
+                    if hasattr(model, 'overrides') and 'imgsz' in model.overrides:
+                        imgsz = model.overrides['imgsz']
+                        if isinstance(imgsz, int):
+                            metadata["input_size"] = [imgsz, imgsz]
+                        elif isinstance(imgsz, (list, tuple)):
+                            metadata["input_size"] = list(imgsz)
 
-                logger.info(f"Successfully parsed {metadata['model_type'].upper()} model from {file_path}")
-                return metadata
+                    logger.info(f"Successfully parsed {metadata['model_type'].upper()} model from {file_path}")
+                    return metadata
 
-            except Exception as ultralytics_error:
-                logger.debug(f"Not an ultralytics model: {ultralytics_error}")
+                except Exception as ultralytics_error:
+                    logger.debug(f"Not an ultralytics model: {ultralytics_error}")
+            else:
+                logger.info(f"Skipping ultralytics loader for MMDetection model: {hint_model_type}")
 
             # Try to load as raw PyTorch checkpoint
             # Use weights_only=False for MMEngine checkpoints (PyTorch 2.6+)
