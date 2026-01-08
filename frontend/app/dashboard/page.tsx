@@ -174,11 +174,11 @@ export default function Dashboard() {
       icon: Brain,
       content: "ai-model-management"
     },
-    // {
-    //   name: "3D 객체 관리",
-    //   icon: Box,
-    //   content: "3d-object-management"
-    // },
+    {
+      name: "3D 객체 관리",
+      icon: Box,
+      content: "3d-object-management"
+    },
     {
       name: "평가 기록 관리",
       icon: FileText,

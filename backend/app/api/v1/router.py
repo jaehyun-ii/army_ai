@@ -28,6 +28,7 @@ from app.api.v1.endpoints import (
     patches,
     admin,
     manual,
+    vehicle_models,
 )
 
 api_router = APIRouter()
@@ -79,3 +80,6 @@ api_router.include_router(users.router, prefix="/users", tags=["Users"])
 
 # Admin
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin"])
+
+# Vehicle Models (CARLA 3D Models)
+api_router.include_router(vehicle_models.router, prefix="/vehicle-models", tags=["Vehicle Models"])

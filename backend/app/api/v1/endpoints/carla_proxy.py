@@ -317,14 +317,19 @@ async def _proxy_stream_post(
                 is_complete = loc_idx is not None and loc_total is not None and loc_idx == loc_total
                 if is_complete:
                   # storage_path는 메인 백엔드의 경로 사용 (이미지 경로가 업데이트된 경우 그것을 사용)
-                  # 예: /storage/3d/k2_tank
+                  # 예: /storage/3d/k2_tank 또는 /storage/3d/exports/k2_tank_tmpkkkkksad
                   image_path = result.get("image_path", "")
                   if image_path and image_path.startswith("/storage/3d/"):
                     # 이미지 경로에서 폴더 경로 추출 (마지막 파일명 제거)
                     # /storage/3d/k2_tank/etron_car_eval/image.jpg -> /storage/3d/k2_tank
+                    # /storage/3d/exports/k2_tank_tmpkkkkksad/etron_car_eval/image.jpg -> /storage/3d/exports/k2_tank_tmpkkkkksad
                     path_parts = image_path.split("/")
                     if len(path_parts) >= 4:
-                      storage_path = "/".join(path_parts[:4])  # /storage/3d/folder_name
+                      # exports 폴더인 경우 한 단계 더 깊이 포함
+                      if len(path_parts) >= 5 and path_parts[3] == "exports":
+                        storage_path = "/".join(path_parts[:5])  # /storage/3d/exports/folder_name
+                      else:
+                        storage_path = "/".join(path_parts[:4])  # /storage/3d/folder_name
                     else:
                       storage_path = f"/storage/3d/{payload.get('dataset_name', 'unknown')}"
                   else:
@@ -1566,3 +1571,132 @@ async def download_patch_3d(
     media_type=media_type_map.get(media_type, "application/octet-stream"),
     filename=patch.file_name or f"{patch.name}.png"
   )
+
+
+# ==========================================
+# Vehicles 3D Model Upload
+# ==========================================
+
+from fastapi import UploadFile, File
+import shutil
+import zipfile
+import tempfile
+
+@router.post("/vehicles/upload")
+async def upload_vehicles_folder(
+  files: List[UploadFile] = File(..., description="Vehicles 폴더의 모든 파일 (ZIP 또는 개별 파일)")
+):
+  """
+  CARLA Vehicles 폴더 업로드 (전체 덮어쓰기)
+  
+  - ZIP 파일로 업로드하거나 폴더 내 모든 파일을 개별 업로드
+  - 기존 storage/simulator/Vehicle 폴더를 완전히 교체
+  - 업로드 후 CARLA 시뮬레이터 재시작 필요
+  """
+  try:
+    logger.info(f"Received {len(files)} files for Vehicles upload")
+    
+    # Target directory: storage/simulator/Vehicle
+    target_dir = Path(settings.STORAGE_ROOT) / "simulator" / "Vehicle"
+    
+    # Backup existing folder (optional)
+    if target_dir.exists():
+      backup_dir = Path(settings.STORAGE_ROOT) / "simulator" / f"Vehicle_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+      logger.info(f"Backing up existing Vehicles to: {backup_dir}")
+      shutil.copytree(target_dir, backup_dir)
+      # Remove old folder
+      shutil.rmtree(target_dir)
+    
+    # Create fresh directory
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Process files
+    total_size = 0
+    file_count = 0
+    
+    for upload_file in files:
+      file_name = upload_file.filename
+      
+      # Check if it's a ZIP file
+      if file_name.endswith('.zip'):
+        logger.info(f"Extracting ZIP file: {file_name}")
+        # Save ZIP to temp location
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
+          content = await upload_file.read()
+          tmp_file.write(content)
+          tmp_zip_path = tmp_file.name
+        
+        # Extract ZIP
+        try:
+          with zipfile.ZipFile(tmp_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(target_dir)
+          file_count += len(zipfile.ZipFile(tmp_zip_path).namelist())
+          total_size += len(content)
+        finally:
+          # Clean up temp file
+          Path(tmp_zip_path).unlink()
+      
+      else:
+        # Save individual file
+        # Preserve directory structure if file_name contains paths
+        file_path = target_dir / file_name
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        content = await upload_file.read()
+        with open(file_path, 'wb') as f:
+          f.write(content)
+        
+        total_size += len(content)
+        file_count += 1
+        logger.debug(f"Saved file: {file_name} ({len(content)} bytes)")
+    
+    logger.info(f"Vehicles upload complete: {file_count} files, {total_size} bytes")
+    
+    return {
+      "state": 200,
+      "message": "Vehicles folder uploaded successfully. Please restart CARLA simulator to apply changes.",
+      "result": {
+        "file_count": file_count,
+        "total_size": total_size,
+        "target_path": str(target_dir),
+        "warning": "CARLA 시뮬레이터를 재시작해야 변경사항이 반영됩니다."
+      }
+    }
+  
+  except Exception as e:
+    logger.error(f"Vehicles upload failed: {e}", exc_info=True)
+    raise HTTPException(
+      status_code=500,
+      detail=f"Vehicles upload failed: {str(e)}"
+    )
+
+
+@router.get("/vehicles/list")
+async def list_vehicles():
+  """
+  CARLA 차량 목록 조회 (CARLA 백엔드 프록시)
+  """
+  try:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+      response = await client.get(f"{CARLA_BASE_URL}/sim_object_list")
+      response.raise_for_status()
+      data = response.json()
+      
+      return {
+        "state": 200,
+        "message": "Success",
+        "result": data.get("result", [])
+      }
+  
+  except httpx.HTTPError as e:
+    logger.error(f"Failed to fetch vehicle list from CARLA: {e}")
+    raise HTTPException(
+      status_code=502,
+      detail=f"Failed to communicate with CARLA backend: {str(e)}"
+    )
+  except Exception as e:
+    logger.error(f"Unexpected error fetching vehicle list: {e}")
+    raise HTTPException(
+      status_code=500,
+      detail=f"Failed to fetch vehicle list: {str(e)}"
+    )
