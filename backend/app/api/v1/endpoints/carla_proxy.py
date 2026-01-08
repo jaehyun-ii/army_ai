@@ -826,7 +826,7 @@ async def generate_patch(request: PatchGenerationRequest, db: AsyncSession = Dep
         if weights_artifact:
           # 메인 백엔드 경로 → CARLA 백엔드 경로 변환
           # /storage/models/... → /workspace/models/...
-          carla_model_path = weights_artifact.storage_path.replace("/storage/models/", "/workspace/models/")
+          carla_model_path = weights_artifact.storage_path.replace("/storage/model/", "/workspace/model/")
           payload["model_path"] = carla_model_path
           logger.info(f"Converted model_path for CARLA: {carla_model_path}")
         else:
