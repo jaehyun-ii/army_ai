@@ -852,8 +852,29 @@ async def generate_patch(request: PatchGenerationRequest, db: AsyncSession = Dep
           logger.debug(f"No CONFIG artifact found for model {request.model_id} (not required for all models)")
           payload["config_path"] = ""
 
-        # framework를 model_type으로 변환
-        payload["model_type"] = model.framework.value if model.framework else ""
+        # model_type 추출 (CARLA 백엔드용)
+        # EfficientDet는 "efficientdet", YOLO는 "yolov8" 등으로 전달해야 함
+        # inference_params의 estimator_type에서 추출
+        if model.inference_params and "estimator_type" in model.inference_params:
+          estimator = model.inference_params["estimator_type"]
+          # estimator_type이 "efficientdet"이면 model_type도 "efficientdet"
+          if "efficientdet" in estimator.lower():
+            payload["model_type"] = "efficientdet"
+            logger.info(f"Detected EfficientDet model, setting model_type='efficientdet'")
+          elif "yolo" in estimator.lower():
+            payload["model_type"] = estimator.lower()  # "yolov8", "yolov11" etc.
+            logger.info(f"Detected YOLO model, setting model_type='{estimator.lower()}'")
+          elif "rtdetr" in estimator.lower() or "rt-detr" in estimator.lower():
+            payload["model_type"] = "rtdetr"
+            logger.info(f"Detected RT-DETR model, setting model_type='rtdetr'")
+          else:
+            # 기타 모델은 framework 사용
+            payload["model_type"] = model.framework.value if model.framework else ""
+            logger.warning(f"Unknown estimator type '{estimator}', using framework: {payload['model_type']}")
+        else:
+          # inference_params 없으면 framework 사용 (하위 호환성)
+          payload["model_type"] = model.framework.value if model.framework else ""
+          logger.debug(f"No inference_params, using framework: {payload['model_type']}")
 
         # labelmap에서 class_name 추출
         if model.labelmap:
