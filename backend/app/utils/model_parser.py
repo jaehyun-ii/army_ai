@@ -272,11 +272,11 @@ class ModelParser:
                         logger.info(f"Extracted input size (smallest scale): {metadata['input_size']}")
 
                 # Extract model type from model dict
-                # Pattern: model = dict(..., type='EfficientDet')
-                # We need to find the TOP-LEVEL type (the last one before the closing parenthesis)
-                # Using greedy matching to get the last type in the model dict
-                model_type_pattern = r'model\s*=\s*dict\s*\(.*type\s*=\s*[\'"]([^\'"]+)[\'"]\s*\)'
-                model_type_match = re.search(model_type_pattern, content, re.DOTALL)
+                # Pattern: model = dict(type='EfficientDet', ...)
+                # We need to find the FIRST type inside the model dict (the top-level model type)
+                # Using non-greedy matching to get the first type after 'model = dict('
+                model_type_pattern = r'model\s*=\s*dict\s*\(\s*type\s*=\s*[\'"]([^\'"]+)[\'"]'
+                model_type_match = re.search(model_type_pattern, content)
                 if model_type_match:
                     model_type_raw = model_type_match.group(1)
                     # Normalize: 'EfficientDet' -> 'efficientdet', 'YOLO' -> 'yolo', etc.
