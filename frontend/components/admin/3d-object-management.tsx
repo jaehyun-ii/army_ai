@@ -209,7 +209,7 @@ export function Object3DManagement() {
   const loadVehicles = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch('/api/v1/carla/vehicles/list')
+      const response = await fetch('/api/v1/carla/sim_object_list')
       if (response.ok) {
         const data = await response.json()
         // CARLA API returns vehicle names in result array

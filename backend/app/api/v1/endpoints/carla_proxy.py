@@ -1671,32 +1671,3 @@ async def upload_vehicles_folder(
     )
 
 
-@router.get("/vehicles/list")
-async def list_vehicles():
-  """
-  CARLA 차량 목록 조회 (CARLA 백엔드 프록시)
-  """
-  try:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-      response = await client.get(f"{CARLA_BASE_URL}/sim_object_list")
-      response.raise_for_status()
-      data = response.json()
-      
-      return {
-        "state": 200,
-        "message": "Success",
-        "result": data.get("result", [])
-      }
-  
-  except httpx.HTTPError as e:
-    logger.error(f"Failed to fetch vehicle list from CARLA: {e}")
-    raise HTTPException(
-      status_code=502,
-      detail=f"Failed to communicate with CARLA backend: {str(e)}"
-    )
-  except Exception as e:
-    logger.error(f"Unexpected error fetching vehicle list: {e}")
-    raise HTTPException(
-      status_code=500,
-      detail=f"Failed to fetch vehicle list: {str(e)}"
-    )
