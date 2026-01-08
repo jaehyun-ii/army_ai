@@ -263,6 +263,8 @@ services:
     volumes:
       # Storage - OverlayFS mounted on host (storage_base + storage_data → storage)
       - ./storage/3d/exports:/workspace/exports:rw
+      # 사용자 업로드 모델 접근 (읽기 전용) - 내장 모델과 충돌 없음 (다른 경로에 위치)
+      - ./storage/models:/workspace/models:ro
       - ./carla_client_entrypoint.sh:/entrypoint.sh:ro
     networks:
       - army_ai_network_dev

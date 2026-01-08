@@ -56,6 +56,7 @@ class PatchGenerationRequest(BaseModel):
     object_detection_name: Optional[str] = None  # 또는 직접 이름 지정 (내장 모델용)
     # 아래는 선택적 (메인 백엔드에서 자동으로 채워짐)
     model_path: str = ""
+    config_path: str = ""  # CONFIG artifact 경로 (EfficientDet 등 MMDet 모델용)
     model_type: str = ""
     class_name: List[str] = Field(default_factory=lambda: ["car"])
     input_size: List[int] = Field(default_factory=lambda: [640, 640])
@@ -816,18 +817,40 @@ async def generate_patch(request: PatchGenerationRequest, db: AsyncSession = Dep
       # 내장 모델이 아닌 경우에만 상세 정보 추가
       if model.name not in ["yolov11", "yolov8", "rt-detr", "efficientdet_d2_tank"]:
         # WEIGHTS artifact 조회
-        stmt = select(ODModelArtifact).where(
+        weights_stmt = select(ODModelArtifact).where(
           ODModelArtifact.model_id == request.model_id,
           ODModelArtifact.artifact_type == ArtifactType.WEIGHTS
         )
-        result = await db.execute(stmt)
-        artifact = result.scalar_one_or_none()
+        weights_result = await db.execute(weights_stmt)
+        weights_artifact = weights_result.scalar_one_or_none()
 
-        if artifact:
-          payload["model_path"] = artifact.storage_path
+        if weights_artifact:
+          # 메인 백엔드 경로 → CARLA 백엔드 경로 변환
+          # /storage/models/... → /workspace/models/...
+          carla_model_path = weights_artifact.storage_path.replace("/storage/models/", "/workspace/models/")
+          payload["model_path"] = carla_model_path
+          logger.info(f"Converted model_path for CARLA: {carla_model_path}")
         else:
           logger.warning(f"No WEIGHTS artifact found for model {request.model_id}")
           payload["model_path"] = ""
+
+        # CONFIG artifact 조회 (EfficientDet 등 MMDetection 모델용)
+        config_stmt = select(ODModelArtifact).where(
+          ODModelArtifact.model_id == request.model_id,
+          ODModelArtifact.artifact_type == ArtifactType.CONFIG
+        )
+        config_result = await db.execute(config_stmt)
+        config_artifact = config_result.scalar_one_or_none()
+
+        if config_artifact:
+          # 메인 백엔드 경로 → CARLA 백엔드 경로 변환
+          # /storage/models/... → /workspace/models/...
+          carla_config_path = config_artifact.storage_path.replace("/storage/models/", "/workspace/models/")
+          payload["config_path"] = carla_config_path
+          logger.info(f"Converted config_path for CARLA: {carla_config_path}")
+        else:
+          logger.debug(f"No CONFIG artifact found for model {request.model_id} (not required for all models)")
+          payload["config_path"] = ""
 
         # framework를 model_type으로 변환
         payload["model_type"] = model.framework.value if model.framework else ""
@@ -839,14 +862,18 @@ async def generate_patch(request: PatchGenerationRequest, db: AsyncSession = Dep
           payload["class_name"] = request.class_name
 
         # input_spec에서 input_size 추출
-        if model.input_spec and "size" in model.input_spec:
-          input_size_val = model.input_spec["size"]
-          if isinstance(input_size_val, list):
-            payload["input_size"] = input_size_val
-          elif isinstance(input_size_val, dict):
-            # {width: 640, height: 640} 형식 지원
-            payload["input_size"] = [input_size_val.get("width", 640), input_size_val.get("height", 640)]
+        # ✅ 수정: "shape" 키 사용 (DB에 {"shape": [768, 768, 3], "dtype": "float32"} 형식으로 저장됨)
+        if model.input_spec and "shape" in model.input_spec:
+          shape = model.input_spec["shape"]
+          if isinstance(shape, list) and len(shape) >= 2:
+            # [768, 768, 3] → [768, 768] (높이, 너비만 추출)
+            payload["input_size"] = shape[:2]
+            logger.info(f"Extracted input_size from input_spec.shape: {payload['input_size']}")
+          else:
+            logger.warning(f"Invalid shape format in input_spec: {shape}")
+            payload["input_size"] = request.input_size
         else:
+          logger.debug(f"No shape in input_spec, using default: {request.input_size}")
           payload["input_size"] = request.input_size
 
         payload["device_type"] = request.device_type or ""
