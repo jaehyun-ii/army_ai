@@ -56,7 +56,6 @@ class PatchGenerationRequest(BaseModel):
     object_detection_name: Optional[str] = None  # 또는 직접 이름 지정 (내장 모델용)
     # 아래는 선택적 (메인 백엔드에서 자동으로 채워짐)
     model_path: str = ""
-    config_path: str = ""  # CONFIG artifact 경로 (EfficientDet 등 MMDet 모델용)
     model_type: str = ""
     class_name: List[str] = Field(default_factory=lambda: ["car"])
     input_size: List[int] = Field(default_factory=lambda: [640, 640])
@@ -833,24 +832,6 @@ async def generate_patch(request: PatchGenerationRequest, db: AsyncSession = Dep
         else:
           logger.warning(f"No WEIGHTS artifact found for model {request.model_id}")
           payload["model_path"] = ""
-
-        # CONFIG artifact 조회 (EfficientDet 등 MMDetection 모델용)
-        config_stmt = select(ODModelArtifact).where(
-          ODModelArtifact.model_id == request.model_id,
-          ODModelArtifact.artifact_type == ArtifactType.CONFIG
-        )
-        config_result = await db.execute(config_stmt)
-        config_artifact = config_result.scalar_one_or_none()
-
-        if config_artifact:
-          # 메인 백엔드 경로 → CARLA 백엔드 경로 변환
-          # /storage/models/... → /workspace/models/...
-          carla_config_path = config_artifact.storage_path.replace("/storage/models/", "/workspace/models/")
-          payload["config_path"] = carla_config_path
-          logger.info(f"Converted config_path for CARLA: {carla_config_path}")
-        else:
-          logger.debug(f"No CONFIG artifact found for model {request.model_id} (not required for all models)")
-          payload["config_path"] = ""
 
         # model_type 추출 (CARLA 백엔드용)
         # EfficientDet는 "efficientdet", YOLO는 "yolov8" 등으로 전달해야 함
