@@ -523,10 +523,26 @@ class NoiseOSFDPyTorch(EvasionAttack):
             for label in y:
                 from app.ai.losses.box_utils import xyxy2xywh
 
-                boxes_xyxy = torch.from_numpy(label['boxes']).float().to(self.device)
+                boxes = label.get('boxes') if isinstance(label, dict) else None
+                labels = label.get('labels') if isinstance(label, dict) else None
+
+                if boxes is None or len(boxes) == 0:
+                    pseudo_gt = {
+                        'boxes': torch.zeros((0, 4), dtype=torch.float32, device=self.device),
+                        'labels': torch.zeros((0,), dtype=torch.int64, device=self.device),
+                    }
+                    pseudo_gts.append(pseudo_gt)
+                    continue
+
+                boxes_xyxy = torch.from_numpy(boxes).float().to(self.device)
+                if labels is None or len(labels) == 0:
+                    labels_t = torch.zeros((boxes_xyxy.shape[0],), dtype=torch.int64, device=self.device)
+                else:
+                    labels_t = torch.from_numpy(labels).long().to(self.device)
+
                 pseudo_gt = {
                     'boxes': xyxy2xywh(boxes_xyxy),
-                    'labels': torch.from_numpy(label['labels']).long().to(self.device)
+                    'labels': labels_t,
                 }
                 pseudo_gts.append(pseudo_gt)
 
