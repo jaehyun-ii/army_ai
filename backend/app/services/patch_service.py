@@ -841,6 +841,8 @@ class PatchService:
             filename_lower = str(model_path).lower()
             if 'rtdetr' in filename_lower or 'rt-detr' in filename_lower:
                 model_type = 'rtdetr'
+            elif 'efficientdet' in filename_lower or 'effdet' in filename_lower:
+                model_type = 'efficientdet'
             else:
                 model_type = 'yolo'
             logger.info(f"Detected model type from filename: {model_type}")
@@ -848,6 +850,7 @@ class PatchService:
         # Normalize model type
         model_type = model_type.lower()
         is_rtdetr = model_type in ['rtdetr', 'rt-detr']
+        is_efficientdet = 'efficientdet' in model_type
 
         # Detect available device (GPU significantly faster for patch generation)
         device_type = "cuda" if torch.cuda.is_available() else "cpu"
@@ -885,6 +888,30 @@ class PatchService:
                 is_ultralytics=True,
             )
             logger.info(f"RT-DETR ART estimator loaded: {type(estimator)}")
+
+        elif is_efficientdet:
+            # Load EfficientDet model
+            logger.info("Loading EfficientDet model for adversarial patch generation")
+            from app.ai.estimators.object_detection.model_factory import model_factory
+
+            factory_device_type = "gpu" if device_type == "cuda" else "cpu"
+            estimator = model_factory.load_model(
+                model_path=str(model_path),
+                model_type="efficientdet",
+                class_names=class_names,
+                input_size=input_size,
+                device_type=factory_device_type,
+                clip_values=(0, 255),
+            )
+
+            # Align input_size with estimator configuration (may come from MMDetection config)
+            if estimator.input_shape and len(estimator.input_shape) >= 3:
+                if channels_first:
+                    input_size = [estimator.input_shape[1], estimator.input_shape[2]]
+                else:
+                    input_size = [estimator.input_shape[0], estimator.input_shape[1]]
+
+            logger.info(f"EfficientDet ART estimator loaded: {type(estimator)}")
 
         else:
             # Load YOLO model
