@@ -498,18 +498,22 @@ async def _proxy_stream_post(
 
                 if is_complete:
                   # storage_path는 메인 백엔드의 경로 사용
-                  # 예: /storage/3d/adv_k2_tank
+                  # 예: /storage/3d/exports/adv_k2_tank
                   image_path = result.get("image_path", "")
                   if image_path and image_path.startswith("/storage/3d/"):
                     # 이미지 경로에서 폴더 경로 추출
-                    # /storage/3d/adv_k2_tank/path/image.jpg -> /storage/3d/adv_k2_tank
+                    # /storage/3d/exports/adv_k2_tank/k2_tank_eval/image.jpg -> /storage/3d/exports/adv_k2_tank
                     path_parts = image_path.split("/")
                     if len(path_parts) >= 4:
-                      storage_path = "/".join(path_parts[:4])  # /storage/3d/folder_name
+                      # exports 폴더인 경우 한 단계 더 깊이 포함
+                      if len(path_parts) >= 5 and path_parts[3] == "exports":
+                        storage_path = "/".join(path_parts[:5])  # /storage/3d/exports/adv_folder_name
+                      else:
+                        storage_path = "/".join(path_parts[:4])  # /storage/3d/adv_folder_name
                     else:
-                      storage_path = f"/storage/3d/adv_{payload.get('dataset_name', 'unknown')}"
+                      storage_path = f"/storage/3d/exports/adv_{payload.get('dataset_name', 'unknown')}"
                   else:
-                    storage_path = f"/storage/3d/adv_{payload.get('dataset_name', 'unknown')}"
+                    storage_path = f"/storage/3d/exports/adv_{payload.get('dataset_name', 'unknown')}"
 
                   processed_images = (
                     result.get("processed_images")
