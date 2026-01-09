@@ -189,6 +189,11 @@ class PatchService:
         # Initialize SSE logger
         sse_logger = SSELogger(logger, self.sse_manager, session_id)
 
+        attack = None
+        estimator = None
+        x_train = None
+        y_train = None
+
         try:
             # Validate attack method
             if attack_method not in ["patch", "dpatch", "robust_dpatch", "naturalistic"]:
@@ -626,7 +631,7 @@ class PatchService:
                 f"패치 생성 완료: shape={patch.shape}",
                 patch_id=str(patch_record.id),
                 file_path=str(patch_path),
-                storage_key=str(patch_path.relative_to(self.storage_root)),
+                storage_key=str(patch_path.relative_to(self.storage_root_main)),
             )
 
             # Send complete event to close SSE stream
@@ -636,7 +641,7 @@ class PatchService:
                     "message": "패치 생성 완료!",
                     "patch_id": str(patch_record.id),
                     "file_path": str(patch_path),
-                    "storage_key": str(patch_path.relative_to(self.storage_root)),
+                    "storage_key": str(patch_path.relative_to(self.storage_root_main)),
                 })
 
             return schemas.Patch2DResponse.model_validate(patch_record)
@@ -693,6 +698,21 @@ class PatchService:
                     "message": error_message,
                 })
             raise
+        finally:
+            try:
+                import gc
+                import torch
+
+                attack = None
+                estimator = None
+                x_train = None
+                y_train = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup GPU memory: {cleanup_error}")
 
     async def _collect_target_images(
         self,

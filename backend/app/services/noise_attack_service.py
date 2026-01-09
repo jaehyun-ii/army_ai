@@ -224,6 +224,9 @@ class NoiseAttackService:
         # Initialize SSE logger
         sse_logger = SSELogger(logger, self.sse_manager, session_id)
 
+        attack = None
+        estimator = None
+
         try:
             # Validate attack method
             valid_methods = ["fgsm", "pgd", "universal_noise", "noise_osfd", "distortion_aware"]
@@ -1077,7 +1080,7 @@ class NoiseAttackService:
 
             await db.commit()
 
-            # Note: No need to cleanup estimator since we created it directly with ART, not via model_inference_service
+            # GPU cleanup is handled in finally
 
             await sse_logger.success(
                 "공격 데이터셋 생성 완료!",
@@ -1148,6 +1151,18 @@ class NoiseAttackService:
                     "message": error_message,
                 })
             raise
+        finally:
+            try:
+                import gc
+
+                attack = None
+                estimator = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup GPU memory: {cleanup_error}")
 
     async def _load_dataset_images(
         self,

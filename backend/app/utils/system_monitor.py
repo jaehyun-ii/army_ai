@@ -310,7 +310,7 @@ class SystemMonitor:
                 optimal_batch_size = default_batch_size
 
             # Extra safety margin: halve the computed batch size
-            optimal_batch_size = max(1, optimal_batch_size // 2)
+            optimal_batch_size = max(1, optimal_batch_size // 4)
 
             print(f"[GPU Memory] Total: {total_mb:.1f} MB, Used: {used_mb:.1f} MB, "
                   f"Free: {free_mb:.1f} MB")
