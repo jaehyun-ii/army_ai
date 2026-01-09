@@ -151,7 +151,16 @@ class AnnotationParser:
         """
         try:
             # YOLO 형식 TXT 파일 찾기 (우선순위)
+            # 1) annotations 폴더 안에서 찾기
             txt_files = list(annotations_dir.glob("*_yolo.txt"))
+
+            # 2) annotations 폴더가 비어있으면 상위 폴더에서 찾기 (CARLA가 상위에 생성하는 경우)
+            if not txt_files:
+                parent_dir = annotations_dir.parent
+                txt_files = list(parent_dir.glob("*_yolo.txt"))
+                if txt_files:
+                    logger.info(f"Found YOLO file in parent directory: {txt_files[0]}")
+
             if txt_files:
                 annotation_file = txt_files[0]
                 logger.info(f"Found YOLO format annotation file: {annotation_file}")

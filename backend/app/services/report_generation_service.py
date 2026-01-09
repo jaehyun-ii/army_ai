@@ -451,8 +451,13 @@ class ReportGenerationService:
         if robustness_metrics:
             delta_map_percent = robustness_metrics.get('drop_percentage', 0)
             robustness_ratio = robustness_metrics.get('robustness_ratio', 1.0)
-            delta_map_percent = ((clean_map - attacked_map) / clean_map) * 100
-            robustness_ratio = attacked_map / clean_map if clean_map > 0 else 0.0
+            # Division by zero 방지: clean_map이 0이면 비율 계산 불가
+            if clean_map > 0:
+                delta_map_percent = ((clean_map - attacked_map) / clean_map) * 100
+                robustness_ratio = attacked_map / clean_map
+            else:
+                delta_map_percent = 0.0
+                robustness_ratio = 0.0
         else:
             delta_map_percent = 0.0
             robustness_ratio = 0.0
