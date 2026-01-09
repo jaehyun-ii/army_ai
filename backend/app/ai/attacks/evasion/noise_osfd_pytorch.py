@@ -595,7 +595,7 @@ class NoiseOSFDPyTorch(EvasionAttack):
         full_batch = batch_size >= num_samples
         logger.info(
             f"Training on {num_samples} images with batch_size={batch_size} "
-            f"({\"full-batch\" if full_batch else \"mini-batch\"})"
+            f"({'full-batch' if full_batch else 'mini-batch'})"
         )
 
         # Training loop - process in batches (full-batch when batch_size >= num_samples)
