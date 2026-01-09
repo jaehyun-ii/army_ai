@@ -512,6 +512,10 @@ class NoiseOSFDPyTorch(EvasionAttack):
         self._train_osfd_perturbation_pytorch(x_torch)
 
         # Apply perturbation (with optional bbox masking)
+        num_samples = x_torch.shape[0]
+        batch_size = min(self.batch_size, num_samples)
+        x_adv_batches = []
+
         if y is not None:
             logger.info("Applying perturbation with bbox masking from provided labels")
             # Convert y to torch format
@@ -525,17 +529,36 @@ class NoiseOSFDPyTorch(EvasionAttack):
                     'labels': torch.from_numpy(label['labels']).long().to(self.device)
                 }
                 pseudo_gts.append(pseudo_gt)
-            # Apply masked perturbation
-            x_adv_torch = self._apply_perturbation_with_mask(x_torch, pseudo_gts)
+
+            for start in range(0, num_samples, batch_size):
+                batch_x = x_torch[start:start + batch_size].to(
+                    self.device,
+                    dtype=torch.float32,
+                    non_blocking=True,
+                )
+                batch_gts = pseudo_gts[start:start + batch_size]
+                with torch.no_grad():
+                    x_adv_batch = self._apply_perturbation_with_mask(batch_x, batch_gts)
+                x_adv_batches.append(self._torch_to_numpy(x_adv_batch, x[start:start + batch_size]))
         else:
             # Apply perturbation to entire image
             logger.info("Applying perturbation to entire images (no masking)")
-            with torch.no_grad():
-                x_adv_torch = torch.clamp(x_torch + self._perturbation_torch, self.clip_min, self.clip_max)
+            for start in range(0, num_samples, batch_size):
+                batch_x = x_torch[start:start + batch_size].to(
+                    self.device,
+                    dtype=torch.float32,
+                    non_blocking=True,
+                )
+                with torch.no_grad():
+                    x_adv_batch = torch.clamp(
+                        batch_x + self._perturbation_torch,
+                        self.clip_min,
+                        self.clip_max
+                    )
+                x_adv_batches.append(self._torch_to_numpy(x_adv_batch, x[start:start + batch_size]))
 
-        # Convert back to NumPy (use ART's reverse conversion)
-        x_adv = self._torch_to_numpy(x_adv_torch, x)
-        self._perturbation = self._torch_to_numpy(self._perturbation_torch, x)
+        x_adv = np.concatenate(x_adv_batches, axis=0)
+        self._perturbation = self._torch_to_numpy(self._perturbation_torch, x[:1])
 
         # Cleanup
         if self._feature_extractor is not None:
@@ -606,7 +629,11 @@ class NoiseOSFDPyTorch(EvasionAttack):
             layer_losses = {layer_idx: 0.0 for layer_idx in self.feature_layer_indices}
 
             for start in range(0, num_samples, batch_size):
-                batch_x = x[start:start + batch_size]
+                batch_x = x[start:start + batch_size].to(
+                    self.device,
+                    dtype=torch.float32,
+                    non_blocking=True,
+                )
                 batch_weight = batch_x.shape[0] / float(num_samples)
 
                 # Extract benign features for this batch (no gradients needed)
@@ -792,7 +819,7 @@ class NoiseOSFDPyTorch(EvasionAttack):
         x_torch, _ = self.estimator._preprocess_and_convert_inputs(
             x=x, y=None, fit=False, no_grad=True
         )
-        x_torch = x_torch.to(self.device, dtype=torch.float32)
+        x_torch = x_torch.to(dtype=torch.float32)
         logger.debug(f"Input converted to torch: {x_torch.shape}, device: {x_torch.device}")
         return x_torch, x
 
