@@ -500,12 +500,13 @@ async def download_model_archive(
 
     # Get model directory
     from app.core.config import settings
-    model_dir = Path(settings.STORAGE_ROOT) / "models" / artifacts[0].storage_key
+    # Use STORAGE_MODELS_ROOT instead of hardcoded path
+    model_dir = Path(settings.STORAGE_MODELS_ROOT) / artifacts[0].storage_key
 
     if not model_dir.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model files not found in storage"
+            detail=f"Model files not found in storage: {model_dir}"
         )
 
     # Create temporary ZIP file

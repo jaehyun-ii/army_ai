@@ -202,7 +202,10 @@ class ReportGenerationService:
         html_content = self._fill_template(report_data, template_path)
 
         # 5. PDF 생성
-        output_filename = f"evaluation_{evaluation_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        # Use evaluation name for filename (sanitize for filesystem)
+        eval_name_sanitized = "".join(c for c in eval_run.name if c.isalnum() or c in (' ', '-', '_')).strip()
+        eval_name_sanitized = eval_name_sanitized.replace(' ', '_')
+        output_filename = f"{eval_name_sanitized}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         output_path = self.reports_dir / output_filename
 
         # FontConfiguration 생성 (한글 폰트 지원)

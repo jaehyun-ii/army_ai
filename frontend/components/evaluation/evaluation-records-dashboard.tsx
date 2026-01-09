@@ -332,6 +332,77 @@ export function EvaluationRecordsDashboard() {
     setSelectedRunId(null)
   }
 
+  const handleGenerateReport = async (record: EvaluationRun, e: React.MouseEvent) => {
+    e.stopPropagation()
+
+    if (record.status !== 'completed') {
+      toast.error('완료된 평가만 보고서를 생성할 수 있습니다')
+      return
+    }
+
+    try {
+      toast.info('보고서 생성 중...')
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/evaluation/runs/${record.id}/generate-report`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || '보고서 생성 실패')
+      }
+
+      toast.success('보고서 생성이 시작되었습니다. 잠시 후 다운로드 버튼을 사용하세요.')
+
+      // Refresh evaluations to get updated report_path
+      setTimeout(() => {
+        refetchEvaluations()
+      }, 3000)
+
+    } catch (error: any) {
+      console.error('Report generation error:', error)
+      toast.error(error.message || '보고서 생성에 실패했습니다')
+    }
+  }
+
+  const handleDownloadReport = async (record: EvaluationRun, e: React.MouseEvent) => {
+    e.stopPropagation()
+
+    if (record.status !== 'completed') {
+      toast.error('완료된 평가만 보고서를 다운로드할 수 있습니다')
+      return
+    }
+
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/evaluation/runs/${record.id}/download-report`)
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          toast.error('보고서가 생성되지 않았습니다. 먼저 보고서를 생성하세요.')
+          return
+        }
+        const error = await response.json()
+        throw new Error(error.detail || '보고서 다운로드 실패')
+      }
+
+      // Download file
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${record.name}_보고서.pdf`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+
+      toast.success('보고서 다운로드 완료')
+
+    } catch (error: any) {
+      console.error('Report download error:', error)
+      toast.error(error.message || '보고서 다운로드에 실패했습니다')
+    }
+  }
+
   // Show detail view if a run is selected
   if (selectedRunId) {
     return <EvaluationDetailView runId={selectedRunId} onBack={handleBackToList} />
@@ -581,17 +652,31 @@ export function EvaluationRecordsDashboard() {
                           {formatDate(record.created_at)}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleViewDetail(record)
-                            }}
-                            className="text-primary hover:text-primary hover:bg-primary-container"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleViewDetail(record)
+                              }}
+                              className="text-primary hover:text-primary hover:bg-primary-container"
+                              title="상세 보기"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            {record.status === 'completed' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => handleDownloadReport(record, e)}
+                                className="text-tertiary hover:text-tertiary hover:bg-tertiary-container"
+                                title="보고서 다운로드"
+                              >
+                                <Download className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}

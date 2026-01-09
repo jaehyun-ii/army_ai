@@ -1098,6 +1098,132 @@ async def compare_robustness(
     }
 
 
+# ========== Report Generation Endpoints ==========
+
+@router.post("/runs/{run_id}/generate-report")
+async def generate_evaluation_report(
+    run_id: UUID,
+    background_tasks: BackgroundTasks,
+    include_charts: bool = Query(True, description="Include charts in the report"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate PDF report for an evaluation run.
+
+    The report will be generated asynchronously in the background.
+    Once completed, you can download it using the download-report endpoint.
+
+    Returns the evaluation run with updated report_path.
+    """
+    # Check if evaluation run exists
+    db_eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
+    if not db_eval_run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    # Check if evaluation is completed
+    if db_eval_run.status != EvalStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Evaluation must be completed before generating report (current status: {db_eval_run.status})",
+        )
+
+    async def generate_report():
+        """Background task to generate report"""
+        from app.database import AsyncSessionLocal
+        from app.services.report_generation_service import report_generation_service
+        import logging
+        logger = logging.getLogger(__name__)
+
+        async with AsyncSessionLocal() as bg_db:
+            try:
+                logger.info(f"Starting report generation for evaluation {run_id}")
+
+                # Generate report
+                report_path = await report_generation_service.generate_evaluation_report(
+                    db=bg_db,
+                    evaluation_id=run_id,
+                    include_charts=include_charts,
+                )
+
+                logger.info(f"Report generated: {report_path}")
+
+                # Update eval run with report path
+                await crud_evaluation.update_eval_run(
+                    db=bg_db,
+                    eval_run_id=run_id,
+                    eval_run_update=EvalRunUpdate(
+                        params={
+                            **(db_eval_run.params or {}),
+                            "report_path": report_path,
+                        }
+                    ),
+                )
+
+                logger.info(f"Report generation completed for evaluation {run_id}")
+
+            except Exception as e:
+                logger.error(f"Report generation failed: {e}", exc_info=True)
+
+    # Schedule report generation in background
+    background_tasks.add_task(generate_report)
+
+    return {
+        "message": "Report generation started",
+        "run_id": str(run_id),
+        "status": "generating",
+    }
+
+
+@router.get("/runs/{run_id}/download-report")
+async def download_evaluation_report(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Download PDF report for an evaluation run.
+
+    The report must be generated first using the generate-report endpoint.
+    """
+    from fastapi.responses import FileResponse
+    from app.core.config import settings
+
+    # Get evaluation run
+    db_eval_run = await crud_evaluation.get_eval_run(db=db, eval_run_id=run_id)
+    if not db_eval_run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evaluation run not found",
+        )
+
+    # Check if report exists
+    if not db_eval_run.params or "report_path" not in db_eval_run.params:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report not found. Please generate the report first using /generate-report endpoint.",
+        )
+
+    report_path = db_eval_run.params["report_path"]
+
+    # Construct absolute path
+    absolute_path = Path(settings.STORAGE_ROOT) / report_path
+
+    if not absolute_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Report file not found at {report_path}. Please regenerate the report.",
+        )
+
+    # Return file
+    return FileResponse(
+        path=str(absolute_path),
+        media_type="application/pdf",
+        filename=absolute_path.name,
+    )
+
+
 # Include visualization router
 from app.api.v1.endpoints import evaluation_viz
 router.include_router(evaluation_viz.router, tags=["Evaluation Visualization"])

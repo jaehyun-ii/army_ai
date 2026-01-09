@@ -119,3 +119,73 @@ async def delete_image(
         )
 
     await crud.image_2d.soft_delete(db, id=image_id)
+
+
+@router.get("/{dataset_id}/download")
+async def download_dataset_2d(
+    dataset_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Download 2D dataset as ZIP file.
+
+    Returns a ZIP file containing all images and annotations from the dataset.
+    """
+    from fastapi.responses import StreamingResponse
+    from app.core.config import settings
+    from pathlib import Path
+    import zipfile
+    import io
+    import json
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Get dataset
+    dataset = await crud.dataset_2d.get(db, id=dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+
+    # Get images
+    images = await crud.image_2d.get_by_dataset(db, dataset_id=dataset_id, skip=0, limit=10000)
+
+    if not images:
+        raise HTTPException(status_code=404, detail="No images found in dataset")
+
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    storage_root = Path(settings.STORAGE_ROOT)
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Add images
+        for img in images:
+            try:
+                file_path = storage_root / img.storage_key
+                if file_path.exists():
+                    zip_file.write(file_path, f"images/{img.file_name}")
+                else:
+                    logger.warning(f"Image file not found: {img.storage_key}")
+            except Exception as e:
+                logger.warning(f"Failed to add image {img.file_name} to ZIP: {e}")
+
+        # Add metadata
+        metadata = {
+            "dataset_id": str(dataset.id),
+            "dataset_name": dataset.name,
+            "description": dataset.description,
+            "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
+            "image_count": len(images),
+            "format": dataset.format,
+        }
+        zip_file.writestr("metadata.json", json.dumps(metadata, indent=2, ensure_ascii=False))
+
+    zip_buffer.seek(0)
+
+    # Return as streaming response
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{dataset.name}.zip"'
+        }
+    )
