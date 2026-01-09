@@ -1203,79 +1203,12 @@ class NoiseAttackService:
         model_id: UUID,
     ):
         """
-        Load model from DB and create a real ART estimator (for attacks).
+        Load model from DB and create an estimator using model_factory (for attacks).
 
         Returns:
-            ART-compatible estimator (PyTorchYolo)
+            ART-compatible estimator and input_size
         """
-        import torch
-        from ultralytics import YOLO
-
-        # Get model from DB
-        model = await crud.od_model.get(db, id=model_id)
-        if not model:
-            raise ValidationError(f"Model {model_id} not found")
-
-        # Get weights artifact
-        if not model.artifacts:
-            raise ValidationError(f"Model {model_id} has no artifacts")
-
-        weights_artifact = next((a for a in model.artifacts if a.artifact_type == "weights"), None)
-        if not weights_artifact:
-            raise ValidationError(f"Model {model_id} has no weights artifact")
-
-        # Get model path
-        from pathlib import Path
-        model_path = Path(weights_artifact.storage_key)
-        if not model_path.exists():
-            model_path = Path(weights_artifact.storage_path)
-            if not model_path.exists():
-                raise ValidationError(f"Model file not found: {model_path}")
-
-        # Get class names from labelmap
-        class_names = ["person"]  # Default
-        if model.labelmap:
-            class_names = [model.labelmap[str(i)] for i in sorted([int(k) for k in model.labelmap.keys()])]
-
-        # Get input size
-        input_size = [640, 640]  # Default
-        if model.input_spec and "shape" in model.input_spec:
-            input_size = model.input_spec["shape"][:2]
-
-        # Load YOLO model using ultralytics
-        yolo_model = YOLO(str(model_path))
-
-        # Detect model name from path
-        filename = str(model_path).lower()
-        if 'yolo11' in filename or 'yolov11' in filename:
-            model_name = 'yolov11'
-        elif 'yolo10' in filename or 'yolov10' in filename:
-            model_name = 'yolov10'
-        elif 'yolo9' in filename or 'yolov9' in filename:
-            model_name = 'yolov9'
-        elif 'yolo8' in filename or 'yolov8' in filename:
-            model_name = 'yolov8'
-        else:
-            model_name = 'yolov8'  # Default
-
-        # Create ART PyTorchYolo estimator
-        # This is the REAL ART estimator, not our custom one
-        # is_ultralytics=True is REQUIRED for YOLOv8+
-        # model_name is also required when using is_ultralytics=True
-        # channels_first=True AND provide NCHW input (C, H, W format)
-        estimator = ARTPyTorchYolo(
-            model=yolo_model.model,
-            input_shape=(3, *input_size),  # (C, H, W)
-            channels_first=True,  # PyTorch uses NCHW format
-            clip_values=(0, 255),
-            attack_losses=("loss_total",),
-            device_type="cpu",  # Use CPU for consistency
-            is_ultralytics=True,  # REQUIRED for YOLOv8+
-            model_name=model_name,  # Required with is_ultralytics
-        )
-
-        logger.info(f"ART estimator loaded: {type(estimator)}")
-        return estimator, input_size
+        return await self._load_custom_estimator(db, model_id)
 
     async def _load_custom_estimator(
         self,
@@ -1323,11 +1256,43 @@ class NoiseAttackService:
         if model.input_spec and "shape" in model.input_spec:
             input_size = model.input_spec["shape"][:2]
 
-        # Get estimator type from inference_params
-        if not model.inference_params or "estimator_type" not in model.inference_params:
-            raise ValueError("Model is missing 'estimator_type' in inference_params")
+        # Get estimator type from inference_params with yaml_config fallback
+        estimator_type_str = None
+        if (model.inference_params and
+            "metadata" in model.inference_params and
+            "yaml_config" in model.inference_params["metadata"] and
+            "model_type" in model.inference_params["metadata"]["yaml_config"]):
+            estimator_type_str = model.inference_params["metadata"]["yaml_config"]["model_type"]
+            logger.info(f"Using model_type from yaml_config: {estimator_type_str}")
+        elif model.inference_params and "estimator_type" in model.inference_params:
+            estimator_type_str = model.inference_params["estimator_type"]
+            logger.info(f"Using estimator_type from inference_params: {estimator_type_str}")
+        else:
+            filename_lower = str(model_path).lower()
+            if 'rtdetr' in filename_lower or 'rt-detr' in filename_lower:
+                estimator_type_str = 'rtdetr'
+            elif 'efficientdet' in filename_lower or 'effdet' in filename_lower:
+                estimator_type_str = 'efficientdet'
+            elif 'faster' in filename_lower and 'rcnn' in filename_lower:
+                estimator_type_str = 'faster_rcnn'
+            else:
+                estimator_type_str = 'yolo'
+            logger.info(f"Detected estimator type from filename: {estimator_type_str}")
 
-        estimator_type = schemas.EstimatorType(model.inference_params["estimator_type"])
+        estimator_type_str = estimator_type_str.lower()
+        if estimator_type_str in ["rtdetr", "rt-detr", "rt_detr"]:
+            estimator_type = schemas.EstimatorType.RT_DETR
+        elif estimator_type_str == "yolo":
+            estimator_type = schemas.EstimatorType.YOLO
+        elif estimator_type_str in ["faster_rcnn", "fasterrcnn"]:
+            estimator_type = schemas.EstimatorType.FASTER_RCNN
+        elif estimator_type_str == "efficientdet":
+            estimator_type = schemas.EstimatorType.EFFICIENTDET
+        else:
+            try:
+                estimator_type = schemas.EstimatorType(estimator_type_str)
+            except ValueError:
+                raise ValueError(f"Unsupported estimator type: {estimator_type_str}")
 
         # Map estimator_type to model_factory type
         model_type_map = {
@@ -1371,6 +1336,13 @@ class NoiseAttackService:
             device_type=device_type,  # Use GPU if available for better performance
             clip_values=(0, 255),
         )
+
+        if getattr(estimator, "input_shape", None) and len(estimator.input_shape) >= 3:
+            if estimator.channels_first:
+                input_size = [estimator.input_shape[1], estimator.input_shape[2]]
+            else:
+                input_size = [estimator.input_shape[0], estimator.input_shape[1]]
+            logger.info(f"Aligned input_size with estimator: {input_size}")
 
         logger.info(f"Custom estimator loaded: {type(estimator)}")
         return estimator, input_size
