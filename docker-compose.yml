@@ -82,7 +82,7 @@ services:
       STORAGE_TYPE: ${STORAGE_TYPE}
 
       # PyTorch/CUDA - GPU 0,1 for adversarial attacks (but can see all GPUs for monitoring)
-      CUDA_VISIBLE_DEVICES: "0,1"
+      CUDA_VISIBLE_DEVICES: "1"
 
       # System monitoring - use host /proc for accurate stats
       PROCFS_PATH: /host/proc

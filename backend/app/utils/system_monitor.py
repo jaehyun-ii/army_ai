@@ -239,24 +239,19 @@ class SystemMonitor:
         self,
         image_size: tuple = (640, 640),
         model_type: str = "yolo",
-        safety_margin: float = 0.7,  # INCREASED: More conservative to prevent OOM
-        default_batch_size: int = 128  # REDUCED: Conservative default
+        safety_margin: float = 0.2,  # CHANGED: 0.7 -> 0.2 (reserve 20% of free memory)
+        default_batch_size: int = 32  # CHANGED: 128 -> 32 (safer default)
     ) -> int:
         """
         Calculate optimal batch size based on available GPU memory.
 
-        IMPORTANT: Conservative estimation to prevent OOM errors.
-        Real memory usage is often higher due to:
-        - Model weights already loaded on GPU
-        - PyTorch CUDA cache
-        - Gradient accumulation
-        - Intermediate activations
-        - EOT sampling (for patch attacks)
+        Uses free memory based calculation:
+        usable = free_mb * (1 - safety_margin)
 
         Args:
             image_size: Input image size (height, width)
             model_type: Model type ("yolo", "patch", "noise")
-            safety_margin: Safety margin (0.0-0.9) to prevent OOM errors (default: 0.7)
+            safety_margin: Safety margin (0.0-0.9) to reserve from FREE memory (default: 0.2)
             default_batch_size: Default batch size if GPU not available or calculation fails
 
         Returns:
@@ -273,19 +268,16 @@ class SystemMonitor:
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
 
-            # CRITICAL: Use TOTAL memory, not free memory
-            # Model is already loaded, so we work with remaining capacity
+            # Get memory info
             total_mb = mem_info.total / 1024 / 1024
             used_mb = mem_info.used / 1024 / 1024
             free_mb = mem_info.free / 1024 / 1024
 
             # Calculate available memory for batch processing
-            # Use smaller of: (free memory) or (total * (1-safety_margin) - used)
-            # This accounts for memory already in use
-            max_usable_mb = min(
-                free_mb * 0.8,  # Use only 80% of free memory
-                total_mb * (1 - safety_margin) - used_mb  # Reserve safety margin from total
-            )
+            # IMPROVED: Use free memory with safety margin
+            # Old logic was: total * (1 - safety) - used  <-- too conservative if safety is high
+            # New logic: free * (1 - safety)              <-- more intuitive
+            max_usable_mb = free_mb * (1 - safety_margin)
 
             pynvml.nvmlShutdown()
 
@@ -298,28 +290,28 @@ class SystemMonitor:
             # Based on empirical testing - these are MINIMUM estimates
             if model_type == "yolo":
                 # YOLOv8/v11 detection + gradients
-                mb_per_image = base_mb_per_image * 8  # INCREASED: 4 → 8
+                mb_per_image = base_mb_per_image * 8
             elif model_type == "patch":
                 # Adversarial patch generation (VERY memory intensive)
                 # Transformations + EOT samples (5x) + gradients + optimizer states
-                mb_per_image = base_mb_per_image * 15  # INCREASED: 6 → 15
+                mb_per_image = base_mb_per_image * 15
             elif model_type == "noise":
                 # Noise attack (moderately memory intensive)
-                mb_per_image = base_mb_per_image * 6  # INCREASED: 3 → 6
+                mb_per_image = base_mb_per_image * 6
             else:
                 mb_per_image = base_mb_per_image * 8
 
             # Calculate optimal batch size
             if mb_per_image > 0 and max_usable_mb > 0:
                 optimal_batch_size = int(max_usable_mb / mb_per_image)
-                # Clamp between reasonable bounds - REDUCED max from 256 to 64
+                # Clamp between reasonable bounds
                 optimal_batch_size = max(1, min(optimal_batch_size, 64))
             else:
                 optimal_batch_size = default_batch_size
 
             print(f"[GPU Memory] Total: {total_mb:.1f} MB, Used: {used_mb:.1f} MB, "
                   f"Free: {free_mb:.1f} MB")
-            print(f"[GPU Memory] Max usable: {max_usable_mb:.1f} MB, "
+            print(f"[GPU Memory] Max usable: {max_usable_mb:.1f} MB (safety={safety_margin}), "
                   f"Est. {mb_per_image:.1f} MB/image")
             print(f"[GPU Memory] Optimal batch size: {optimal_batch_size}")
 
